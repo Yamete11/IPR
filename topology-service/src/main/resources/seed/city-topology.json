@@ -1,0 +1,24 @@
+{
+  "graph": "city_topology",
+  "vertices": [
+    { "label": "Substation",          "id": "sub-1",   "properties": { "name": "Central Substation", "voltage_kv": 110 } },
+    { "label": "DistributionNode",    "id": "node-5",  "properties": { "name": "Distribution Node 5" } },
+    { "label": "DistributionNode",    "id": "node-6",  "properties": { "name": "Distribution Node 6" } },
+    { "label": "ResidentialBuilding", "id": "bld-12",  "properties": { "name": "Building 12", "apartments": 84 } },
+    { "label": "ResidentialBuilding", "id": "bld-19",  "properties": { "name": "Building 19", "apartments": 120 } },
+    { "label": "ResidentialBuilding", "id": "bld-20",  "properties": { "name": "Building 20", "apartments": 60 } },
+    { "label": "Sensor",              "id": "s-00042", "properties": { "metric_type": "pipe_pressure" } },
+    { "label": "Sensor",              "id": "s-00108", "properties": { "metric_type": "cable_temperature" } },
+    { "label": "Sensor",              "id": "s-00311", "properties": { "metric_type": "substation_voltage" } }
+  ],
+  "edges": [
+    { "type": "PowerLine",  "from": "sub-1",   "to": "node-5",  "properties": { "capacity_mw": 40 } },
+    { "type": "PowerLine",  "from": "sub-1",   "to": "node-6",  "properties": { "capacity_mw": 40 } },
+    { "type": "Pipeline",   "from": "node-5",  "to": "bld-12",  "properties": {} },
+    { "type": "Pipeline",   "from": "node-5",  "to": "bld-19",  "properties": {} },
+    { "type": "Pipeline",   "from": "node-6",  "to": "bld-20",  "properties": {} },
+    { "type": "SensorLink", "from": "s-00042", "to": "node-5",  "properties": {} },
+    { "type": "SensorLink", "from": "s-00108", "to": "sub-1",   "properties": {} },
+    { "type": "SensorLink", "from": "s-00311", "to": "sub-1",   "properties": {} }
+  ]
+}

@@ -1,0 +1,34 @@
+sequenceDiagram
+    autonumber
+    participant SIM as sensor-simulator
+    participant K1 as Kafka / city-telemetry
+    participant ING as ingestion-service
+    participant TS as TimescaleDB
+    participant AGE as AGE graph
+    participant DET as anomaly-detector
+    participant K2 as Kafka / infrastructure-alerts
+    participant AI as ai-incident-responder
+    participant LLM as Claude API
+    participant INC as incidents table
+    participant API as incident-api
+    participant DASH as dashboard
+    SIM->>K1: produce metric {sensor_id, metric_type, value, status}
+    K1->>ING: consume (consumer group)
+    ING->>TS: INSERT into metrics hypertable
+    Note over TS: continuous aggregate<br/>updates 5-min averages
+    loop periodic check
+        DET->>TS: query 5-min aggregates / thresholds
+    end
+    DET->>K2: produce alert (pressure=0 / temp>120C)
+    K2->>AI: consume alert (consumer group)
+    AI->>TS: read last 1h of sensor history
+    Note over AGE: graph owned & seeded<br/>by topology-service
+    AI->>AGE: Cypher - impacted nodes & buildings
+    AI->>LLM: structured prompt (context + topology)
+    Note over AI,LLM: circuit breaker guards<br/>Claude API downtime
+    LLM-->>AI: JSON {criticality, impacted, steps}
+    AI->>INC: INSERT incident report
+    DASH->>API: GraphQL query (incidents + metrics)
+    API->>INC: read incidents
+    API->>TS: read recent metrics
+    API-->>DASH: GraphQL response

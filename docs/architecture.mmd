@@ -1,0 +1,47 @@
+flowchart LR
+  subgraph edge["Edge / Simulation"]
+    SIM["sensor-simulator<br/>(Python) ~1000 sensors"]
+  end
+  subgraph kafka["Apache Kafka (Strimzi)"]
+    T1(["topic: city-telemetry"])
+    T2(["topic: infrastructure-alerts"])
+    DLQ(["topic: *.DLQ"])
+  end
+  subgraph services["Microservices (Kubernetes)"]
+    ING["ingestion-service<br/>(Java) · HPA on lag"]
+    DET["anomaly-detector<br/>(Java)"]
+    AI["ai-incident-responder<br/>(Python) · circuit breaker"]
+    API["incident-api<br/>(Java) · GraphQL"]
+    TOPO["topology-service<br/>(Java) · GraphQL"]
+  end
+  subgraph config["Config"]
+    SEED[("topology<br/>seed file")]
+  end
+  subgraph pg["PostgreSQL (TimescaleDB + AGE)"]
+    TS[("TimescaleDB<br/>metrics hypertable<br/>+ continuous aggregates")]
+    INC[("incidents table")]
+    AGE[("AGE topology graph")]
+  end
+  subgraph ext["External"]
+    CLAUDE["Claude API (Anthropic)"]
+    DASH["Demo dashboard / client"]
+  end
+  SIM -- "produce JSON metrics" --> T1
+  T1 -- "consume (group)" --> ING
+  ING -- "INSERT metrics" --> TS
+  ING -. "poison msgs" .-> DLQ
+  SEED -- "load at startup" --> TOPO
+  TOPO -- "seed/manage topology (Cypher)" --> AGE
+  DET -- "read 5-min aggregates" --> TS
+  DET -- "produce critical alert" --> T2
+  T2 -- "consume (group)" --> AI
+  AI -- "read 1h history" --> TS
+  AI -- "read dependency graph" --> AGE
+  AI -- "structured prompt (HTTPS)" --> CLAUDE
+  CLAUDE -- "JSON remediation plan" --> AI
+  AI -- "INSERT incident" --> INC
+  AI -. "poison msgs" .-> DLQ
+  API -- "read incidents" --> INC
+  API -- "read metrics" --> TS
+  DASH -- "GraphQL query" --> API
+  DASH -- "GraphQL (network view)" --> TOPO

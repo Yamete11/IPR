@@ -1,0 +1,37 @@
+# Local dev datastore for the Smart City telemetry system.
+#
+# A SINGLE PostgreSQL instance hosting both the TimescaleDB (time-series) and
+# Apache AGE (graph/topology) extensions — one datastore, two logical roles, as
+# committed in the architecture (docs/microservices.md, CLAUDE.md). Kafka, the
+# services, etc. live elsewhere; this file is just the shared database.
+
+services:
+  postgres:
+    build:
+      context: ./docker/postgres
+    image: smartcity/postgres-age-timescale:pg16
+    container_name: smartcity-postgres
+    # shared_preload_libraries MUST be set at server start: TimescaleDB requires
+    # it, and preloading AGE lets every session use the graph without LOAD 'age'.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=timescaledb,age"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-smartcity}
+      POSTGRES_USER: ${POSTGRES_USER:-smartcity}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smartcity}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smartcity} -d ${POSTGRES_DB:-smartcity}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  pgdata:
