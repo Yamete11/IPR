@@ -1,1 +1,43 @@
+spring:
+  application:
+    name: topology-service
 
+  datasource:
+    # AGE_PORT matches the host port docker-compose.yml publishes for age-db.
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${AGE_PORT:5432}/${POSTGRES_DB:smartcity}
+    username: ${POSTGRES_USER:smartcity}
+    password: ${POSTGRES_PASSWORD:smartcity}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: topology-pool
+      maximum-pool-size: 10
+      connection-init-sql: 'SET search_path = ag_catalog, "$user", public'
+
+# Startup seed loader (SeedLoader): populates the AGE city_topology graph from the seed file.
+topology:
+  seed:
+    enabled: true
+    location: classpath:seed/city-topology.json
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized
+
+---
+# Dev-only: expose the interactive GraphiQL console and the schema printer endpoint.
+# Gated behind the `dev` profile so they are never enabled in other environments.
+spring:
+  config:
+    activate:
+      on-profile: dev
+  graphql:
+    graphiql:
+      enabled: true
+    schema:
+      printer:
+        enabled: true

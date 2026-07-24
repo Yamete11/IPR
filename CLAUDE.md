@@ -2,22 +2,37 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Working rule: the user writes all the code
+## Working rule: Claude may write code
 
-**Claude must NOT author or edit source code in this repository.** The user creates the projects and writes all implementation code themselves. Claude's role is limited to:
-- **Advising** — suggesting an approach, explaining APIs/patterns, pointing at docs, reviewing the user's code against a checklist.
-- **Verifying** — running the code, tests, and tooling; checking that things work; reporting results.
+Claude **may author and edit source code** in this repository. The user lifted the earlier "user writes all the code" restriction on 2026-07-23, so Claude can now scaffold projects, write classes/config, and fix files as usual — while still advising (explaining approaches/APIs, pointing at docs, reviewing against a checklist) and verifying (running code, tests, and tooling; reporting results).
 
-Do not scaffold projects, write classes/config, or "fix" files for the user unless they explicitly ask for that specific code. If a request is ambiguous about whether it wants written code, ask first. (Design docs, this `CLAUDE.md`, diagrams, and memory are not "source code" — those Claude may edit as usual.)
+Follow the design documents and conventions below; when a change is large or ambiguous, confirm the approach before writing a lot of code.
 
-## Project status: planning stage
+## Project status: early implementation
 
-This repository is mostly design documents plus one service under active implementation: **`topology-service/`** (Java 25 / Spring Boot 4.1.0, at the repo root) — Gradle build is set up and dependencies resolve; application code (AGE client, seed loader) is being written. The other services are still design-only. The earlier **`sensor-simulator`** Python script was removed during a restructuring and is not currently in the repo. Do not invent build/lint/test commands for services that have no code. **Update this file as real code, tooling, and commands are added.**
+This repository is design documents plus **two implemented services**, each its own standalone Gradle project (Java 25 / Spring Boot 4.1.0):
 
-Build topology-service (first compile provisions JDK 25 via the foojay toolchain resolver):
+- **`topology-service/`** — AGE graph write (seed loader) + GraphQL read API (`vertices`/`edges`/`dependents`/`dependencies`); done and verified against `age-db`.
+- **`ingestion-service/`** — consumes Kafka `city-telemetry` → TimescaleDB `metrics` hypertable, idempotent (`ON CONFLICT`) + DLQ (`city-telemetry.DLQ`); done and verified end-to-end (2026-07-24). See `ingestion-service/TODO.md` for the step log.
+- **`sensor-simulator/`** (Python 3.12) — load generator producing telemetry to `city-telemetry` (keyed by `sensor_id`); mean-reverting random walk per metric with injectable faults. Emits for the 3 graph-seeded sensors (`s-00042`/`s-00108`/`s-00311`) plus optional synthetic ones. Verified feeding the full simulator→Kafka→ingestion→TimescaleDB path.
+
+The remaining services (`anomaly-detector`, `ai-incident-responder`, `incident-api`) are still design-only. Do not invent build/lint/test commands for services that have no code. **Update this file as real code, tooling, and commands are added.**
+
+Build the Java services (first compile provisions JDK 25 via the foojay toolchain resolver):
 ```bash
 cd topology-service && ./gradlew build
+cd ingestion-service && ./gradlew build
 ```
+
+Run the sensor-simulator (Python):
+```bash
+cd sensor-simulator && python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -r requirements.txt
+./.venv/Scripts/python.exe sensor_simulator.py            # feed city-telemetry
+```
+
+Local backing services (`docker-compose.yml`, repo root): `age-db` (5432), `timescaledb` (5433), `kafka` (KRaft, 9092). Run `ingestion-service` end-to-end with `docker compose up -d timescaledb kafka` then `cd ingestion-service && ./gradlew bootRun`.
+
+> **Boot 4 note:** autoconfiguration is modularised — depend on `spring-boot-starter-<tech>` (e.g. `spring-boot-starter-kafka`), not the raw framework jar, or Boot ships no autoconfig for it (silent no-op).
 
 These design documents are the source of truth; read them before making architectural decisions:
 
@@ -58,11 +73,11 @@ AI Worker (AI-Incident-Responder)
    Incidents table
 ```
 
-Everything is deployed to a **local Kubernetes cluster** (Minikube or Kind). Kafka is run via an operator (**Strimzi**). A **single PostgreSQL instance** hosts both the **TimescaleDB** and **Apache AGE** extensions (one datastore, two logical roles — not two separate databases).
+Everything is deployed to a **local Kubernetes cluster** (Minikube or Kind). Kafka is run via an operator (**Strimzi**). Storage is split across **two PostgreSQL instances**, one per role, each on an off-the-shelf image: **`timescaledb`** (TimescaleDB — time-series metrics) and **`age-db`** (Apache AGE — the topology graph). See `docker-compose.yml` for the local-dev definition of both.
 
 ## Microservices (see `docs/microservices.md`)
 
-Six services. The **pipeline** services communicate **asynchronously over Kafka**; `topology-service` and `incident-api` are **request/response GraphQL** for external clients. Backend services never call each other directly — shared state lives in the single PostgreSQL instance:
+Six services. The **pipeline** services communicate **asynchronously over Kafka**; `topology-service` and `incident-api` are **request/response GraphQL** for external clients. Backend services never call each other directly — shared state lives in the two PostgreSQL instances (`age-db` for the graph, `timescaledb` for metrics):
 
 - **sensor-simulator** (Python) — generates telemetry → `city-telemetry` (design; script not currently in the repo).
 - **ingestion-service** (Java) — consumes `city-telemetry`; writes **metrics only** → TimescaleDB; HPA on Kafka lag.

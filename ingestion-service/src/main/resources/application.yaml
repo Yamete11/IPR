@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: ingestion-service
+
+  # TimescaleDB (metrics). TIMESCALE_PORT matches the host port docker-compose.yml publishes.
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${TIMESCALE_PORT:5433}/${POSTGRES_DB:smartcity}
+    username: ${POSTGRES_USER:smartcity}
+    password: ${POSTGRES_PASSWORD:smartcity}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: ingestion-pool
+      maximum-pool-size: 10
+
+  # Create the metrics hypertable on startup from schema.sql (idempotent; see the file).
+  sql:
+    init:
+      mode: always
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    consumer:
+      group-id: ingestion-service
+      # Consume the raw payload as text and parse/validate it ourselves (Jackson 3) so malformed
+      # JSON and invalid fields surface uniformly as exceptions routed to the DLQ.
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized

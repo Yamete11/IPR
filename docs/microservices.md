@@ -9,9 +9,9 @@ Diagram sources: [`architecture.mmd`](architecture.mmd) (component flowchart) an
 - **Anomaly detection is its own service** (`anomaly-detector`), decoupled from ingestion so write throughput and detection scale independently.
 - **Assets & topology are owned by a dedicated `topology-service`**, not by ingestion. Managing the static network graph (assets = vertices, connections = edges) is a different concern from the high-throughput metric stream, and topology does not arrive via `city-telemetry`. `topology-service` is the **sole writer** of the AGE graph; `ingestion-service` is reduced to metrics-only.
 - **A read-side API** (`incident-api`) exposes stored incidents and metrics for the demo dashboard **over GraphQL** — a single typed endpoint the dashboard queries for exactly the fields it needs.
-- **One PostgreSQL instance hosts both the TimescaleDB and AGE extensions** — a single datastore with two logical roles (time-series + graph), not two separate databases.
+- **Two PostgreSQL instances, one per storage role** — `timescaledb` (TimescaleDB, time-series metrics) and `age-db` (Apache AGE, topology graph), each on an off-the-shelf image (no image carries both extensions). Defined for local dev in [`../docker-compose.yml`](../docker-compose.yml).
 - **Language:** Java is primary; Python is used for `sensor-simulator` (a lightweight generator script) and `ai-incident-responder` (Anthropic SDK / RAG code).
-- **Communication:** pipeline services (`sensor-simulator`, `ingestion-service`, `anomaly-detector`, `ai-incident-responder`) talk **asynchronously over Kafka**; `topology-service` and `incident-api` are **request/response GraphQL** for external clients (dashboard/admin). Backend services never call each other directly — shared state lives in the single PostgreSQL instance and is read directly there.
+- **Communication:** pipeline services (`sensor-simulator`, `ingestion-service`, `anomaly-detector`, `ai-incident-responder`) talk **asynchronously over Kafka**; `topology-service` and `incident-api` are **request/response GraphQL** for external clients (dashboard/admin). Backend services never call each other directly — shared state lives in the two PostgreSQL instances (`age-db` for the graph, `timescaledb` for metrics) and is read directly there.
 
 ## Services
 
@@ -30,9 +30,9 @@ Diagram sources: [`architecture.mmd`](architecture.mmd) (component flowchart) an
   - `city-telemetry` — raw metric stream from the simulator.
   - `infrastructure-alerts` — critical events from the detector.
   - `*.DLQ` — dead-letter topics for poison messages (per Idempotent Consumer / DLQ patterns).
-- **PostgreSQL** (single instance, TimescaleDB + AGE extensions):
-  - TimescaleDB: `metrics` hypertable, `metrics_5m_avg` continuous aggregate, `incidents` table.
-  - AGE: `city_topology` graph — vertices `Substation`, `DistributionNode`, `ResidentialBuilding`, `Sensor`; edges `PowerLine`, `Pipeline`, `SensorLink`. Written **only** by `topology-service` (seeded from `topology-service/src/main/resources/seed/city-topology.json`).
+- **PostgreSQL** (two instances, one extension each):
+  - `timescaledb` (TimescaleDB): `metrics` hypertable, `metrics_5m_avg` continuous aggregate, `incidents` table.
+  - `age-db` (Apache AGE): `city_topology` graph — vertices `Substation`, `DistributionNode`, `ResidentialBuilding`, `Sensor`; edges `PowerLine`, `Pipeline`, `SensorLink`. Written **only** by `topology-service` (seeded from `topology-service/src/main/resources/seed/city-topology.json`).
 
 ## Message & data contracts
 
@@ -89,10 +89,12 @@ flowchart LR
   subgraph config["Config"]
     SEED[("topology<br/>seed file")]
   end
-  subgraph pg["PostgreSQL (TimescaleDB + AGE)"]
-    TS[("TimescaleDB<br/>metrics hypertable<br/>+ continuous aggregates")]
+  subgraph pgts["timescaledb (PostgreSQL + TimescaleDB)"]
+    TS[("metrics hypertable<br/>+ continuous aggregates")]
     INC[("incidents table")]
-    AGE[("AGE topology graph")]
+  end
+  subgraph pgage["age-db (PostgreSQL + Apache AGE)"]
+    AGE[("topology graph")]
   end
   subgraph ext["External"]
     CLAUDE["Claude API (Anthropic)"]

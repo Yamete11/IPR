@@ -1,30 +1,46 @@
-# Local dev datastore for the Smart City telemetry system.
+# Local dev backing services for the Smart City telemetry system.
 #
-# A SINGLE PostgreSQL instance hosting both the TimescaleDB (time-series) and
-# Apache AGE (graph/topology) extensions — one datastore, two logical roles, as
-# committed in the architecture (docs/microservices.md, CLAUDE.md). Kafka, the
-# services, etc. live elsewhere; this file is just the shared database.
+# TWO PostgreSQL instances, one per storage role, each on an off-the-shelf image
+# (no custom/inline build):
+#   * age-db      — Apache AGE, owns the network-topology graph (topology-service).
+#   * timescaledb — TimescaleDB, owns the time-series metrics hypertable
+#                   (ingestion-service / anomaly-detector / ai-incident-responder read it).
+# Plus a single-node Kafka broker (KRaft, no ZooKeeper) for local dev of the pipeline
+# services; production runs Kafka via the Strimzi operator on Kubernetes, not this file.
+#   * kafka       — brokers `city-telemetry` + `infrastructure-alerts` (and their *.DLQ).
+# The application services (topology-service, ingestion-service, …) run separately.
+#
+#   docker compose up -d
+#   psql postgres://smartcity:smartcity@localhost:5432/smartcity   # AGE graph
+#   psql postgres://smartcity:smartcity@localhost:5433/smartcity   # TimescaleDB
+#   # Kafka bootstrap: localhost:9092
+#
+# Distinct host ports (age 5432, timescaledb 5433, kafka 9092). topology-service's
+# application.yaml defaults (localhost:5432) already point at age-db; ingestion-service
+# defaults to timescaledb:5433 + kafka:9092.
 
 services:
-  postgres:
-    build:
-      context: ./docker/postgres
-    image: smartcity/postgres-age-timescale:pg16
-    container_name: smartcity-postgres
-    # shared_preload_libraries MUST be set at server start: TimescaleDB requires
-    # it, and preloading AGE lets every session use the graph without LOAD 'age'.
+  # ---------------------------------------------------------------- AGE (graph / topology)
+  age-db:
+    image: apache/age:release_PG16_1.6.0
+    container_name: smartcity-age
+    # Preload AGE so every session uses the graph without an explicit LOAD 'age'.
     command:
       - "postgres"
       - "-c"
-      - "shared_preload_libraries=timescaledb,age"
+      - "shared_preload_libraries=age"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smartcity}
       POSTGRES_USER: ${POSTGRES_USER:-smartcity}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smartcity}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${AGE_PORT:-5432}:5432"
+    # First-boot only: the bind-mounted init dir creates the AGE extension. The graph
+    # itself (create_graph) is created by topology-service's seed loader, not here.
+    # A bind mount (rather than a top-level `configs: content:`) works on older Compose.
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - age_data:/var/lib/postgresql/data
+      - ./docker/age/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smartcity} -d ${POSTGRES_DB:-smartcity}"]
       interval: 10s
@@ -33,5 +49,58 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # ---------------------------------------------------------------- TimescaleDB (metrics)
+  timescaledb:
+    image: timescale/timescaledb:2.28.3-pg16   # pinned 2.x-pg16 tag for reproducibility
+    container_name: smartcity-timescaledb
+    # The image auto-sets shared_preload_libraries=timescaledb and creates the
+    # timescaledb extension on first boot — no command / init needed here.
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-smartcity}
+      POSTGRES_USER: ${POSTGRES_USER:-smartcity}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smartcity}
+    ports:
+      - "${TIMESCALE_PORT:-5433}:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smartcity} -d ${POSTGRES_DB:-smartcity}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Kafka (KRaft, single node)
+  kafka:
+    image: apache/kafka:3.9.1   # official image, KRaft combined mode (broker + controller)
+    container_name: smartcity-kafka
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+    environment:
+      # Single combined broker+controller node.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      # Advertise localhost so host-run services (./gradlew bootRun) can reach the broker.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Single-node replication settings (no room for >1 replica).
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
 volumes:
-  pgdata:
+  age_data:
+  timescale_data:

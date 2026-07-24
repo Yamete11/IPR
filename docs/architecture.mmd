@@ -17,10 +17,12 @@ flowchart LR
   subgraph config["Config"]
     SEED[("topology<br/>seed file")]
   end
-  subgraph pg["PostgreSQL (TimescaleDB + AGE)"]
-    TS[("TimescaleDB<br/>metrics hypertable<br/>+ continuous aggregates")]
+  subgraph pgts["timescaledb (PostgreSQL + TimescaleDB)"]
+    TS[("metrics hypertable<br/>+ continuous aggregates")]
     INC[("incidents table")]
-    AGE[("AGE topology graph")]
+  end
+  subgraph pgage["age-db (PostgreSQL + Apache AGE)"]
+    AGE[("topology graph")]
   end
   subgraph ext["External"]
     CLAUDE["Claude API (Anthropic)"]

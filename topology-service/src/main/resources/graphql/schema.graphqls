@@ -1,0 +1,27 @@
+# Read API over the city_topology AGE graph (see TopologyGraphQLController).
+# Vertices/edges are modelled generically; `properties` is a real JSON scalar
+# (agtype -> JSON), wired via ExtendedScalars.Json in GraphQlConfig.
+scalar JSON
+
+type Vertex {
+  id: ID!
+  label: String!
+  properties: JSON
+}
+
+type Edge {
+  type: String!
+  from: ID!
+  to: ID!
+  properties: JSON
+}
+
+type Query {
+  # Full network view for the dashboard.
+  vertices: [Vertex!]!
+  edges: [Edge!]!
+
+  # Dependency traversals: what loses service if `id` fails / what `id` relies on.
+  dependents(id: ID!): [Vertex!]!
+  dependencies(id: ID!): [Vertex!]!
+}
