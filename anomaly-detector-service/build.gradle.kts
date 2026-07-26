@@ -19,6 +19,16 @@ repositories {
 
 dependencies {
 	implementation("org.springframework.boot:spring-boot-starter")
+	implementation("org.springframework.boot:spring-boot-starter-jdbc")
+	implementation("org.springframework.boot:spring-boot-starter-json")
+	implementation("org.springframework.boot:spring-boot-starter-actuator")
+	// Boot 4 modularised autoconfiguration: the raw `spring-kafka` jar has no Boot autoconfig
+	// (no KafkaTemplate/KafkaAdmin beans). The starter pulls the `spring-boot-kafka` autoconfig
+	// module alongside spring-kafka. This service is a producer only (no @KafkaListener, no DLQ).
+	implementation("org.springframework.boot:spring-boot-starter-kafka")
+
+	runtimeOnly("org.postgresql:postgresql")
+
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

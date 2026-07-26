@@ -15,13 +15,19 @@ This repository is design documents plus **two implemented services**, each its 
 - **`topology-service/`** — AGE graph write (seed loader) + GraphQL read API (`vertices`/`edges`/`dependents`/`dependencies`); done and verified against `age-db`.
 - **`ingestion-service/`** — consumes Kafka `city-telemetry` → TimescaleDB `metrics` hypertable, idempotent (`ON CONFLICT`) + DLQ (`city-telemetry.DLQ`); done and verified end-to-end (2026-07-24). See `ingestion-service/TODO.md` for the step log.
 - **`sensor-simulator/`** (Python 3.12) — load generator producing telemetry to `city-telemetry` (keyed by `sensor_id`); mean-reverting random walk per metric with injectable faults. Emits for the 3 graph-seeded sensors (`s-00042`/`s-00108`/`s-00311`) plus optional synthetic ones. Verified feeding the full simulator→Kafka→ingestion→TimescaleDB path.
+- **`anomaly-detector-service/`** — owns the 5-min `metrics_5m_avg` continuous aggregate (created on startup via a JdbcTemplate `ApplicationRunner`, **`materialized_only = false`** so real-time aggregation folds in recent unmaterialized rows — the modern TimescaleDB default flipped to `true`); scheduled poll of TimescaleDB → threshold rules on min/max → produces critical events to Kafka `infrastructure-alerts` (edge-triggered dedup, producer-only, no DLQ). Done and verified end-to-end (2026-07-25): simulator→ingestion→TimescaleDB→detector→`infrastructure-alerts` emits one alert per fault (3/3), no re-fire on standing faults. See `anomaly-detector-service/TODO.md`.
+- **`ai-incident-responder-service/`** — **built in Java** (the design docs say Python; user overrode on 2026-07-25 for consistency/reuse). Consumes `infrastructure-alerts`; gathers context (last-1h metric history from TimescaleDB + the dependency graph from AGE — the only service reading **both** Postgres instances, via two qualified `JdbcTemplate`s); calls the **Claude API** (official `com.anthropic:anthropic-java` SDK, default `claude-opus-4-8`, adaptive thinking, **structured output** typed to `IncidentPlan`) guarded by a Resilience4j-**core** circuit breaker; writes the `incidents` table (idempotent via `UNIQUE(alert_id)` + `ON CONFLICT`, DLQ for poison alerts). Code complete and `./gradlew build` green. **Verified end-to-end in mock mode** (2026-07-25): `AI_CLAUDE_MOCK=true` swaps the Claude call for a deterministic offline planner (`MockIncidentPlanner`; the `AnthropicClient` bean is `@ConditionalOnProperty` so no key needed) — alert→context(AGE+TimescaleDB)→incident→`incident-api` GraphQL all confirmed, 3 impacted objects resolved from the graph, idempotent. Only the **real Claude call is unexercised** (needs `ANTHROPIC_API_KEY`; billed). See `ai-incident-responder-service/TODO.md`.
+- **`incident-api-service/`** (Java) — read-only **GraphQL** for the dashboard over the `incidents` table + TimescaleDB `metrics` (single datasource, owns no tables). Queries: `incidents`/`incident`/`incidentsBySensor`/`recentMetrics`; the two JSONB array columns are exposed as `[String!]` (parsed in the repo, no JSON scalar). Runs on **8081** (topology uses 8080). Done and verified (2026-07-25) via GraphiQL/`POST /graphql`. See `incident-api-service/TODO.md`.
 
-The remaining services (`anomaly-detector`, `ai-incident-responder`, `incident-api`) are still design-only. Do not invent build/lint/test commands for services that have no code. **Update this file as real code, tooling, and commands are added.**
+All six designed services now exist in code. Do not invent build/lint/test commands for services that have no code. **Update this file as real code, tooling, and commands are added.**
 
 Build the Java services (first compile provisions JDK 25 via the foojay toolchain resolver):
 ```bash
 cd topology-service && ./gradlew build
 cd ingestion-service && ./gradlew build
+cd anomaly-detector-service && ./gradlew build
+cd ai-incident-responder-service && ./gradlew build   # needs ANTHROPIC_API_KEY only to run, not to build
+cd incident-api-service && ./gradlew build
 ```
 
 Run the sensor-simulator (Python):

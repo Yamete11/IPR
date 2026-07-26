@@ -1,0 +1,57 @@
+spring:
+  application:
+    name: ai-incident-responder-service
+
+  # Two datasources — this service reads BOTH PostgreSQL instances. Bound directly onto Hikari
+  # (see config/DataSourceConfig): keys are Hikari's (jdbc-url, connection-init-sql, ...).
+  datasource:
+    # TimescaleDB (metrics history + incidents). Primary — spring.sql.init targets this one.
+    timescale:
+      jdbc-url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${TIMESCALE_PORT:5433}/${POSTGRES_DB:smartcity}
+      username: ${POSTGRES_USER:smartcity}
+      password: ${POSTGRES_PASSWORD:smartcity}
+      driver-class-name: org.postgresql.Driver
+      pool-name: ai-incident-timescale
+      maximum-pool-size: 5
+    # age-db (topology graph). connection-init-sql puts ag_catalog on the search_path so cypher() resolves.
+    age:
+      jdbc-url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${AGE_PORT:5432}/${POSTGRES_DB:smartcity}
+      username: ${POSTGRES_USER:smartcity}
+      password: ${POSTGRES_PASSWORD:smartcity}
+      driver-class-name: org.postgresql.Driver
+      pool-name: ai-incident-age
+      maximum-pool-size: 3
+      connection-init-sql: 'SET search_path = ag_catalog, "$user", public'
+
+  # Create the incidents table on startup from schema.sql (idempotent) against the primary datasource.
+  sql:
+    init:
+      mode: always
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    consumer:
+      group-id: ai-incident-responder
+      # Consume the raw payload as text and parse/validate it ourselves (Jackson 3) so malformed
+      # JSON and invalid fields surface uniformly as exceptions routed to the DLQ.
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+
+# Claude model for the remediation-plan call (ANTHROPIC_API_KEY comes from the environment).
+# ai.claude.mock=true swaps the real Claude call for a deterministic offline planner (no API key,
+# no billed request) so the pipeline can be exercised end-to-end locally.
+ai:
+  claude:
+    model: ${AI_CLAUDE_MODEL:claude-opus-4-8}
+    mock: ${AI_CLAUDE_MOCK:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized

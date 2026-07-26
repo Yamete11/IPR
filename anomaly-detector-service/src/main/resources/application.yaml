@@ -1,3 +1,36 @@
 spring:
   application:
     name: anomaly-detector-service
+
+  # TimescaleDB (metrics), read-only for this service. Same instance ingestion-service writes to;
+  # TIMESCALE_PORT matches the host port docker-compose.yml publishes. No AGE init-sql here.
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${TIMESCALE_PORT:5433}/${POSTGRES_DB:smartcity}
+    username: ${POSTGRES_USER:smartcity}
+    password: ${POSTGRES_PASSWORD:smartcity}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: anomaly-detector-pool
+      maximum-pool-size: 5
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+
+# Detector tuning.
+anomaly:
+  # How often the detection loop polls the continuous aggregate.
+  poll-interval-ms: ${ANOMALY_POLL_INTERVAL_MS:15000}
+  # How far back to look for each series' latest 5-minute window.
+  lookback: ${ANOMALY_LOOKBACK:15m}
+  schema:
+    # Create the metrics_5m_avg continuous aggregate + refresh policy on startup (off in tests).
+    init-enabled: ${ANOMALY_SCHEMA_INIT_ENABLED:true}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized

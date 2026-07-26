@@ -1,0 +1,36 @@
+# Read-only API for the demo dashboard over the incidents table + TimescaleDB metrics
+# (see IncidentGraphQLController). Both tables live in the TimescaleDB instance; this service
+# owns neither — it only reads. The two JSONB array columns are exposed as [String!]! (parsed in
+# the repository), so no JSON scalar is needed.
+
+type Incident {
+  incidentId: ID!
+  alertId: String!
+  sensorId: String!
+  metricType: String
+  criticality: String!
+  impactedObjects: [String!]!
+  remediationSteps: [String!]!
+  summary: String
+  model: String
+  createdAt: String!
+}
+
+type Metric {
+  timestamp: String!
+  sensorId: String!
+  metricType: String!
+  value: Float!
+  status: String!
+}
+
+type Query {
+  # Most recent incidents first.
+  incidents(limit: Int = 50): [Incident!]!
+  # A single incident by its incident_id.
+  incident(id: ID!): Incident
+  # Incidents for one sensor, most recent first.
+  incidentsBySensor(sensorId: ID!): [Incident!]!
+  # Recent raw readings for one sensor (dashboard charts), most recent first.
+  recentMetrics(sensorId: ID!, limit: Int = 100): [Metric!]!
+}
