@@ -30,8 +30,15 @@ public class MetricRepository {
         this.jdbc = jdbc;
     }
 
-    public void save(TelemetryMessage m) {
-        jdbc.update(INSERT,
+    /**
+     * @return 1 if the reading was stored, 0 if an identical
+     *         {@code (timestamp, sensor_id, metric_type)} row already existed and the insert was
+     *         suppressed. Callers must not ignore the 0: it is the only signal that a measurement
+     *         silently vanished, whether from a legitimate Kafka redelivery or from a producer
+     *         emitting colliding timestamps.
+     */
+    public int save(TelemetryMessage m) {
+        return jdbc.update(INSERT,
                 Timestamp.from(m.timestamp()),
                 m.sensorId(),
                 m.metricType(),

@@ -30,6 +30,10 @@ import java.util.regex.Pattern;
  *
  * <p>Gated by {@code topology.seed.enabled} (default true) so it can be switched off — e.g. in
  * tests, where no AGE instance is available.
+ *
+ * <p>The graph written to is {@code topology.graph} — the same property the read side
+ * ({@code TopologyRepository}) queries. The {@code graph} field in the seed file must agree with
+ * it; a mismatch is rejected at startup rather than silently seeding a graph nobody reads.
  */
 @Component
 @ConditionalOnProperty(name = "topology.seed.enabled", havingValue = "true", matchIfMissing = true)
@@ -44,15 +48,18 @@ public class SeedLoader implements ApplicationRunner {
     private final ObjectMapper objectMapper;
     private final ResourceLoader resourceLoader;
     private final String location;
+    private final String configuredGraph;
 
     public SeedLoader(AgeClient age,
                       ObjectMapper objectMapper,
                       ResourceLoader resourceLoader,
-                      @Value("${topology.seed.location:classpath:seed/city-topology.json}") String location) {
+                      @Value("${topology.seed.location:classpath:seed/city-topology.json}") String location,
+                      @Value("${topology.graph:city_topology}") String configuredGraph) {
         this.age = age;
         this.objectMapper = objectMapper;
         this.resourceLoader = resourceLoader;
         this.location = location;
+        this.configuredGraph = configuredGraph;
     }
 
     @Override
@@ -62,7 +69,14 @@ public class SeedLoader implements ApplicationRunner {
             seed = objectMapper.readValue(in, SeedGraph.class);
         }
 
+        // The read side queries `topology.graph`; seeding a differently-named graph would succeed
+        // here and then make every query return an empty list, with no error anywhere.
         String graph = seed.graph();
+        if (graph == null || !graph.equals(configuredGraph)) {
+            throw new IllegalStateException(
+                    "Seed file '" + location + "' declares graph '" + graph + "' but topology.graph is '"
+                            + configuredGraph + "'. They must match, or reads would find nothing.");
+        }
         age.ensureGraph(graph);
 
         for (SeedGraph.Vertex v : seed.vertices()) {
@@ -83,7 +97,16 @@ public class SeedLoader implements ApplicationRunner {
             StringBuilder cypher = new StringBuilder(
                     "MATCH (a {id: $from}), (b {id: $to}) MERGE (a)-[r:" + type + "]->(b)");
             appendSet(cypher, "r", nullSafe(e.properties()), params);
-            age.execute(graph, cypher.toString(), objectMapper.writeValueAsString(params));
+            // RETURN so the row count distinguishes "edge written" from "MATCH found no endpoint".
+            // Without it a typo'd from/to id is a silent no-op that quietly shrinks every
+            // dependents/dependencies answer for the life of the graph.
+            cypher.append(" RETURN r");
+            int rows = age.execute(graph, cypher.toString(), objectMapper.writeValueAsString(params));
+            if (rows == 0) {
+                throw new IllegalStateException(
+                        "Seed edge " + e.from() + " -[" + type + "]-> " + e.to()
+                                + " was not created: no vertex matches one or both endpoint ids.");
+            }
         }
 
         long vertexCount = age.count(graph, "MATCH (n) RETURN count(n)");

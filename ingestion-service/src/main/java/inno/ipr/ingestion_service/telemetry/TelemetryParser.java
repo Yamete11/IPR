@@ -2,6 +2,7 @@ package inno.ipr.ingestion_service.telemetry;
 
 import inno.ipr.ingestion_service.exception.InvalidTelemetryException;
 import org.springframework.stereotype.Component;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -26,7 +27,10 @@ public class TelemetryParser {
         TelemetryMessage message;
         try {
             message = objectMapper.readValue(json, TelemetryMessage.class);
-        } catch (RuntimeException e) {
+        } catch (JacksonException e) {
+            // Only Jackson's own failures mean "the producer sent us garbage". Jackson 3 exceptions
+            // are all unchecked, so catching RuntimeException here would also swallow our own bugs
+            // and dead-letter a perfectly good record under a misleading "malformed JSON" label.
             throw new InvalidTelemetryException("Malformed telemetry JSON", json, e);
         }
         validate(message, json);
@@ -42,6 +46,16 @@ public class TelemetryParser {
         }
         if (isBlank(m.metricType())) {
             throw new InvalidTelemetryException("Missing 'metric_type'", json);
+        }
+        // A dropped 'value' must never reach the hypertable as 0.0: the anomaly detector thresholds
+        // on minimums (pipe_pressure < 0.5, substation_voltage < 50), so a fabricated zero raises a
+        // CRITICAL alert and costs a real Claude call downstream. Same for the non-finite doubles
+        // JSON can carry in (1e400 parses as Infinity).
+        if (m.value() == null) {
+            throw new InvalidTelemetryException("Missing 'value'", json);
+        }
+        if (!Double.isFinite(m.value())) {
+            throw new InvalidTelemetryException("Non-finite 'value': " + m.value(), json);
         }
         if (isBlank(m.status())) {
             throw new InvalidTelemetryException("Missing 'status'", json);

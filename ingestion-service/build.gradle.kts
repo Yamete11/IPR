@@ -30,6 +30,15 @@ dependencies {
 	runtimeOnly("org.postgresql:postgresql")
 
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
+	// In-JVM broker for the error-handler/DLQ integration test — no Docker needed.
+	testImplementation("org.springframework.kafka:spring-kafka-test")
+	// Real TimescaleDB for the schema-initialisation test. Those tests self-skip when Docker is
+	// unavailable, so `./gradlew build` still passes on a machine without it.
+	// Testcontainers 2.x artifact names (`testcontainers-*`); versions come from the Boot 4.1 BOM.
+	// The legacy `org.testcontainers:junit-jupiter`/`:postgresql` coordinates are unmanaged here and
+	// drag the 1.x modules against a 2.x core.
+	testImplementation("org.testcontainers:testcontainers-junit-jupiter")
+	testImplementation("org.testcontainers:testcontainers-postgresql")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

@@ -39,12 +39,13 @@ Toolbar  [Digital Building Twin]  ( Building Twin | Control Plane )   … contex
 ─────────────────────────────────────────────────────────────────────────────────────
 BUILDING TWIN mode                        CONTROL PLANE mode
 ┌───────────┬───────────────────────┐     ┌─────────────────────────────────────────┐
-│ Buildings │ Structure │ Assets │  │     │ DBTs │ Templates                        │
-│ (sidenav) │ Groups │ Telemetry │  │     │                                         │
-│           │ Dashboard            │     │  master list  │  detail pane             │
-│  · Site A │  ┌──────┬──────────┐ │     │               │                          │
-│  · Site B │  │ tree │ detail   │ │     │               │                          │
-└───────────┴──┴──────┴──────────┴─┘     └─────────────────────────────────────────┘
+│ Buildings │ Structure │ Assets    │     │ DBTs │ Templates                        │
+│ (sidenav) │ Groups    │ Telemetry │     │                                         │
+│           │ Dashboard             │     │  master list  │  detail pane            │
+│  · Site A │ ┌──────┬────────────┐ │     │               │                         │
+│  · Site B │ │ tree │ detail     │ │     │               │                         │
+│           │ └──────┴────────────┘ │     │               │                         │
+└───────────┴───────────────────────┘     └─────────────────────────────────────────┘
 ```
 
 Toolbar context actions change with the active tab:
@@ -162,7 +163,7 @@ badge.
 **UX notes**
 - Everything before Publish is an **in-memory draft**. There is no autosave, no dirty-state
   warning, and no confirmation on navigating away. Switching to another template or leaving
-  the tab loses the work silently. This is the single biggest UX gap in the app.
+  the tab loses the work silently. (Summarised under *Unsaved work* in the closing section.)
 - Collapsed types show a summary — *"3 child type(s) · 5 field(s)"* — which is a good pattern
   worth keeping.
 - Space types can be renamed inline (pencil → inline input with ✓ / ✕) and removed. Relationship
@@ -211,8 +212,9 @@ This is the two-step that trips people up. **Assign** says which template the tw
 
 **Steps**
 
-1. Select the twin in the DBTs list. The header shows its name and state badge; the meta grid
-   shows Slug / Tenant / **Template** / Created / Updated.
+1. Select an **ACTIVE** twin in the DBTs list. The header shows its name and state badge; the
+   meta grid shows Slug / Tenant / **Template** / Created / Updated. (Step 4 needs ACTIVE —
+   **Apply now** is disabled in every other state, see the button table below.)
 2. Pick a template from the **Structure template** dropdown — options read
    `standard-building (v2)`.
 3. Click **Assign template**. The *Template* row in the meta grid updates to the template name
@@ -297,8 +299,10 @@ imported building in the Buildings sidenav.
 **UX notes**
 - A retired twin's detail pane replaces every action with *"This twin is retired — read-only
   history, no further actions."* All the edit fields go disabled.
-- Retire is the only destructive action with a confirmation dialog. **Apply now** overwrites a
-  twin's rules with none.
+- Retire is confirmed by a dialog, as most destructive actions in the app are. **Apply now** is
+  the exception: it overwrites the twin's live rules with no confirmation at all, even though it
+  is the most consequential action on this screen. See *Destructive actions* in the closing
+  section for the full inventory.
 - Health is a manual probe, not live — it loads when a twin is selected and otherwise only on
   the refresh button.
 
@@ -391,7 +395,8 @@ If there is nothing to merge with, the dialog says *"No active «Type» siblings
 **Split** — divide one space into several
 
 1. Click **Split**. The dialog opens with **two** name rows by default.
-2. Add rows with **Add «Type»**; remove with the ✕ (disabled below two rows). Optional **Reason**.
+2. Add rows with **Add «Type»**; remove with the ✕ (disabled at two rows — the minimum).
+   Optional **Reason**.
 3. The header warns: *"The room is superseded by the new «Type»s below. History is kept; its
    relationships (sensors, heating, adjacency) are retired and listed for you to re-attach."*
 4. Click **Split into N** — the button label counts the rows.
@@ -438,9 +443,8 @@ lazily — several only fetch their data when first expanded.
 **UX notes**
 - **Sixteen accordion panels in one column.** There is no grouping, no search, and no
   distinction between "core facts" (Properties, Contents, Assets) and "analytics" (seven of the
-  panels). For a user who just wants a room's area, this is a lot of scrolling. If you touch
-  one thing in this app, this is the screen to reconsider — grouping the analytics behind a
-  sub-tab would halve the list.
+  panels). For a user who just wants a room's area, this is a lot of scrolling. This screen is
+  also worth reconsidering — grouping the analytics behind a sub-tab would halve the list.
 - The panel order is fixed, and the edit pencil in the header opens the same element form as
   the tree's Edit action.
 
@@ -632,8 +636,8 @@ Four sub-tabs:
 
 **UX note that will bite you:** the live data feeder only writes to the **default** twin. A twin
 created through the UI (UC-01) has **no live telemetry at all** — every chart is empty, and
-nothing on the screen explains why. Users will read this as a broken app. If you design one
-piece of messaging, make it this one.
+nothing on the screen explains why. Users will read this as a broken app, so it is worth
+explicit messaging.
 
 ---
 
@@ -781,4 +785,4 @@ For someone seeing the app for the first time:
 8. **Assets**: **New Asset**, then **Place Asset**. *(UC-15, UC-16)*
 9. **Groups**: create a heating circuit, add members, set served spaces. *(UC-18)*
 10. **Telemetry** and **Dashboard** — remembering that a hand-made twin has no live data.
-    *(UC-19)*
+    *(UC-19, UC-20)*

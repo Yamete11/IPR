@@ -34,7 +34,15 @@ public class TelemetryConsumer {
     @KafkaListener(topics = "city-telemetry", groupId = "ingestion-service")
     public void onMessage(String payload) {
         TelemetryMessage message = parser.parse(payload);
-        metrics.save(message);
+        int stored = metrics.save(message);
+        if (stored == 0) {
+            // ON CONFLICT DO NOTHING swallowed the row. Expected for a Kafka redelivery, but it also
+            // fires when a producer emits colliding (timestamp, sensor_id, metric_type) tuples — a
+            // real under-count with no error anywhere, so it must not be logged as a success.
+            log.warn("Duplicate metric dropped: sensor={} metric={} at {}",
+                    message.sensorId(), message.metricType(), message.timestamp());
+            return;
+        }
         log.debug("Ingested metric: sensor={} metric={} value={} at {}",
                 message.sensorId(), message.metricType(), message.value(), message.timestamp());
     }

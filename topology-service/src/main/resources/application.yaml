@@ -13,8 +13,12 @@ spring:
       maximum-pool-size: 10
       connection-init-sql: 'SET search_path = ag_catalog, "$user", public'
 
-# Startup seed loader (SeedLoader): populates the AGE city_topology graph from the seed file.
 topology:
+  # The AGE graph this service owns. Single source of truth for BOTH sides: SeedLoader writes it
+  # and TopologyRepository reads it. The `graph` field in the seed file must match, or startup fails
+  # (seeding one graph while querying another would silently return empty results).
+  graph: city_topology
+  # Startup seed loader (SeedLoader): populates the graph above from the seed file.
   seed:
     enabled: true
     location: classpath:seed/city-topology.json
