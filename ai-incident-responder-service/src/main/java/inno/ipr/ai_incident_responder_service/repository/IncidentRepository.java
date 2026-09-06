@@ -36,8 +36,14 @@ public class IncidentRepository {
         return Boolean.TRUE.equals(jdbc.queryForObject(EXISTS, Boolean.class, alertId));
     }
 
-    public void save(Incident incident) {
-        jdbc.update(INSERT,
+    /**
+     * @return 1 if the incident was stored, 0 if a row for this {@code alert_id} already existed and
+     *         {@code ON CONFLICT DO NOTHING} suppressed the insert. Callers must not ignore the 0:
+     *         it means a redelivery raced past {@link #existsByAlertId(String)} and the plan just
+     *         produced — a billed Claude call — was discarded.
+     */
+    public int save(Incident incident) {
+        return jdbc.update(INSERT,
                 incident.incidentId(),
                 incident.alertId(),
                 incident.sensorId(),

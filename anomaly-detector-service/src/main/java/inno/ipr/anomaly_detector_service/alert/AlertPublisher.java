@@ -23,6 +23,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * next breach of that series fires again. A {@link ConcurrentHashMap}-backed set keeps this safe if
  * the scheduler ever overlaps. State is in-memory, so a restart re-alerts any still-active fault —
  * acceptable for this design.
+ *
+ * <p>The key is <em>disarmed again</em> if the send never reaches the broker. Marking a series
+ * alerting on the strength of an enqueue alone loses the alert twice over: the record never lands on
+ * the topic, and the edge trigger then believes the series is already alerting, so no later poll
+ * re-fires it for as long as the fault stands. A pipe sitting at zero pressure would produce no
+ * incident at all.
  */
 @Component
 public class AlertPublisher {
@@ -40,14 +46,18 @@ public class AlertPublisher {
 
     /**
      * Sends an alert for a breaching series iff it was not already breaching. Returns {@code true}
-     * when an alert was published (the rising edge), {@code false} when the breach was already
-     * active and thus suppressed.
+     * when an alert was handed to the producer (the rising edge), {@code false} when the breach was
+     * already active and thus suppressed.
+     *
+     * <p>A delivery failure (or a serialisation failure before it) removes the key again, so the
+     * next scheduler tick re-evaluates the still-breaching series and retries the alert.
      */
     public boolean publishIfNew(String sensorId, String metricType, ThresholdRule.Breach breach) {
         String key = key(sensorId, metricType);
         if (!active.add(key)) {
             return false; // already breaching — suppress duplicate
         }
+
         Alert alert = new Alert(
                 "a-" + UUID.randomUUID().toString().substring(0, 8),
                 sensorId,
@@ -55,8 +65,26 @@ public class AlertPublisher {
                 breach.value(),
                 Instant.now(),
                 breach.rule());
-        String json = objectMapper.writeValueAsString(alert);
-        alertKafkaTemplate.send(KafkaConfig.ALERTS_TOPIC, sensorId, json);
+
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(alert);
+        } catch (RuntimeException e) {
+            // Nothing was sent, so leaving the key armed would silence this series indefinitely.
+            active.remove(key);
+            throw e;
+        }
+
+        alertKafkaTemplate.send(KafkaConfig.ALERTS_TOPIC, sensorId, json)
+                .whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        active.remove(key);
+                        log.error("Alert {} for {} on {} was NOT delivered — re-arming the edge trigger "
+                                        + "so the next poll retries it",
+                                alert.alertId(), metricType, sensorId, ex);
+                    }
+                });
+
         log.warn("ALERT {} — {} on {} (value={}, rule={})",
                 alert.alertId(), metricType, sensorId, breach.value(), breach.rule());
         return true;

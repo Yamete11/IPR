@@ -44,7 +44,7 @@ spring:
 # no billed request) so the pipeline can be exercised end-to-end locally.
 ai:
   claude:
-    model: ${AI_CLAUDE_MODEL:claude-opus-4-8}
+    model: ${AI_CLAUDE_MODEL:claude-opus-5}
     mock: ${AI_CLAUDE_MOCK:false}
 
 management:

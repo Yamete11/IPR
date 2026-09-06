@@ -32,7 +32,12 @@ public class ClaudeIncidentPlanner implements IncidentPlanner {
 
     private static final Logger log = LoggerFactory.getLogger(ClaudeIncidentPlanner.class);
 
-    private static final long MAX_TOKENS = 4096;
+    /**
+     * Adaptive thinking bills its reasoning against this same ceiling, so a tight budget risks the
+     * model spending it on a hard alert and getting cut off mid-structured-output — which surfaces
+     * as a parse failure, not as a short answer. 16k leaves ample room for both halves.
+     */
+    private static final long MAX_TOKENS = 16_000;
 
     private final AnthropicClient client;
     private final CircuitBreaker circuitBreaker;
@@ -40,7 +45,7 @@ public class ClaudeIncidentPlanner implements IncidentPlanner {
 
     public ClaudeIncidentPlanner(AnthropicClient client,
                                  CircuitBreaker claudeCircuitBreaker,
-                                 @Value("${ai.claude.model:claude-opus-4-8}") String model) {
+                                 @Value("${ai.claude.model:claude-opus-5}") String model) {
         this.client = client;
         this.circuitBreaker = claudeCircuitBreaker;
         this.model = model;

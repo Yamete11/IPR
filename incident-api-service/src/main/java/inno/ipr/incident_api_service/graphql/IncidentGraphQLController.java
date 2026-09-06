@@ -19,6 +19,9 @@ import java.util.List;
 @Controller
 public class IncidentGraphQLController {
 
+    /** Ceiling applied to every client-supplied {@code limit} — see {@link #clamp(int)}. */
+    private static final int MAX_LIMIT = 1000;
+
     private final IncidentReadRepository incidentRepository;
     private final MetricReadRepository metricRepository;
 
@@ -30,7 +33,7 @@ public class IncidentGraphQLController {
 
     @QueryMapping
     public List<IncidentDto> incidents(@Argument int limit) {
-        return incidentRepository.findRecent(limit);
+        return incidentRepository.findRecent(clamp(limit));
     }
 
     @QueryMapping
@@ -45,6 +48,16 @@ public class IncidentGraphQLController {
 
     @QueryMapping
     public List<MetricDto> recentMetrics(@Argument String sensorId, @Argument int limit) {
-        return metricRepository.findRecentBySensor(sensorId, limit);
+        return metricRepository.findRecentBySensor(sensorId, clamp(limit));
+    }
+
+    /**
+     * Bounds a client-supplied {@code limit} before it reaches {@code LIMIT ?}. The schema defaults
+     * are only defaults — a caller may send any {@code Int}, and both extremes are hostile against a
+     * hypertable: a huge limit pulls an unbounded result set into heap, while a negative one is a
+     * Postgres error rather than an empty page.
+     */
+    private static int clamp(int limit) {
+        return Math.clamp(limit, 0, MAX_LIMIT);
     }
 }
