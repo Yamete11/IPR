@@ -2,7 +2,7 @@ package inno.ipr.anomaly_detector_service.detection;
 
 import inno.ipr.anomaly_detector_service.domain.MetricWindow;
 
-import java.util.List;
+import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.function.ToDoubleFunction;
 
@@ -11,8 +11,11 @@ import java.util.function.ToDoubleFunction;
  * boundary aggregate ({@code min} or {@code max}) rather than the average, so any excursion within
  * the 5-minute bucket trips the rule even when it is surrounded by healthy readings.
  *
- * <p>The rule set is defined in code (see {@link #RULES}), tuned to the faults the
- * sensor-simulator injects. Externalising thresholds and per-sensor rules is deferred.
+ * <p>The active rule set is configured in {@code application.yaml} under {@code anomaly.rules[]}
+ * (bound by {@link AnomalyRulesProperties}) and validated once at startup by
+ * {@link ThresholdRuleRegistry}. Build instances with {@link #of}, which derives the {@code label}
+ * so the wire format is uniform: {@code <metric>_<min|max><op><threshold>}, e.g.
+ * {@code pipe_pressure_min<0.5}.
  *
  * @param metricType metric this rule applies to, e.g. {@code pipe_pressure}
  * @param aggregate  which boundary of the window to test
@@ -29,13 +32,15 @@ public record ThresholdRule(
 
     /** Which boundary value of the window a rule reads. */
     public enum Aggregate {
-        MIN(MetricWindow::min),
-        MAX(MetricWindow::max);
+        MIN(MetricWindow::min, "min"),
+        MAX(MetricWindow::max, "max");
 
         private final ToDoubleFunction<MetricWindow> extractor;
+        private final String token;
 
-        Aggregate(ToDoubleFunction<MetricWindow> extractor) {
+        Aggregate(ToDoubleFunction<MetricWindow> extractor, String token) {
             this.extractor = extractor;
+            this.token = token;
         }
 
         double of(MetricWindow window) {
@@ -45,30 +50,50 @@ public record ThresholdRule(
 
     /** Breach direction: the value is out of bounds when it falls below/above the threshold. */
     public enum Comparison {
-        BELOW {
+        BELOW("<") {
             @Override
             boolean breached(double value, double threshold) {
                 return value < threshold;
             }
         },
-        ABOVE {
+        ABOVE(">") {
             @Override
             boolean breached(double value, double threshold) {
                 return value > threshold;
             }
         };
 
+        private final String symbol;
+
+        Comparison(String symbol) {
+            this.symbol = symbol;
+        }
+
         abstract boolean breached(double value, double threshold);
     }
 
     /**
-     * The active rule set, one entry per monitored metric. Thresholds are placed just inside the
-     * healthy operating band so a simulator fault reading trips the corresponding boundary.
+     * Builds a rule with a derived label. The threshold is rendered without a spurious {@code .0}
+     * ({@code 120.0} → {@code 120}) but otherwise verbatim ({@code 0.5} stays {@code 0.5}).
      */
-    public static final List<ThresholdRule> RULES = List.of(
-            new ThresholdRule("pipe_pressure", Aggregate.MIN, Comparison.BELOW, 0.5, "pipe_pressure_min<0.5"),
-            new ThresholdRule("cable_temperature", Aggregate.MAX, Comparison.ABOVE, 100.0, "cable_temperature_max>100"),
-            new ThresholdRule("substation_voltage", Aggregate.MIN, Comparison.BELOW, 50.0, "substation_voltage_min<50"));
+    public static ThresholdRule of(String metricType, Aggregate aggregate, Comparison comparison,
+                                   double threshold) {
+        if (metricType == null || metricType.isBlank()) {
+            throw new IllegalArgumentException("metricType must not be blank");
+        }
+        if (aggregate == null || comparison == null) {
+            throw new IllegalArgumentException("aggregate and comparison are required for " + metricType);
+        }
+        if (!Double.isFinite(threshold)) {
+            throw new IllegalArgumentException("threshold must be finite for " + metricType + ": " + threshold);
+        }
+        String label = metricType + "_" + aggregate.token + comparison.symbol + formatThreshold(threshold);
+        return new ThresholdRule(metricType, aggregate, comparison, threshold, label);
+    }
+
+    private static String formatThreshold(double threshold) {
+        return BigDecimal.valueOf(threshold).stripTrailingZeros().toPlainString();
+    }
 
     /**
      * Evaluates this rule against a window, returning the breaching value and rule label when the

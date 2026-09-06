@@ -10,7 +10,7 @@ flowchart LR
   subgraph services["Microservices (Kubernetes)"]
     ING["ingestion-service<br/>(Java) · HPA on lag"]
     DET["anomaly-detector<br/>(Java)"]
-    AI["ai-incident-responder<br/>(Python) · circuit breaker"]
+    AI["ai-incident-responder<br/>(Java) · circuit breaker"]
     API["incident-api<br/>(Java) · GraphQL"]
     TOPO["topology-service<br/>(Java) · GraphQL"]
   end

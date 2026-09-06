@@ -78,9 +78,10 @@ javadoc in the established voice, **verify by running** (no tests).
 ### D. Kafka wiring & resilience (DLQ)
 - [x] **9. `config/KafkaConfig.java`** (new) — `NewTopic` beans for `city-telemetry` (≈3 partitions,
   per-`sensor_id` ordering) and `city-telemetry.DLQ` (`KafkaAdmin` auto-creates them);
-  `DefaultErrorHandler` with a small `FixedBackOff` (≈2 retries) + `DeadLetterPublishingRecoverer`
-  (uses the autoconfigured `KafkaTemplate`) publishing failures to `city-telemetry.DLQ`; register on
-  the listener container factory.
+  `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` publishing failures to `city-telemetry.DLQ`
+  (dedicated `KafkaTemplate<String,String>` bean). Final shape: `InvalidTelemetryException` and
+  `DataIntegrityViolationException` are non-retryable → DLQ on first failure; everything else retries
+  with an unlimited `ExponentialBackOff` (1 s → 30 s cap) via a `ContainerPausingBackOffHandler`.
 - [x] **10. `src/main/resources/application.yaml`** — `spring.kafka`: `bootstrap-servers`
   (`${KAFKA_BOOTSTRAP:localhost:9092}`), consumer `group-id: ingestion-service`,
   `key/value-deserializer: StringDeserializer`, `auto-offset-reset: earliest`,

@@ -42,8 +42,8 @@ public class IncidentGraphQLController {
     }
 
     @QueryMapping
-    public List<IncidentDto> incidentsBySensor(@Argument String sensorId) {
-        return incidentRepository.findBySensor(sensorId);
+    public List<IncidentDto> incidentsBySensor(@Argument String sensorId, @Argument int limit) {
+        return incidentRepository.findBySensor(sensorId, clamp(limit));
     }
 
     @QueryMapping

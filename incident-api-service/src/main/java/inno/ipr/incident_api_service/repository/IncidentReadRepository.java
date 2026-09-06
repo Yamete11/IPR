@@ -33,7 +33,7 @@ public class IncidentReadRepository {
             "SELECT " + COLUMNS + " FROM incidents WHERE incident_id = ?";
 
     private static final String FIND_BY_SENSOR =
-            "SELECT " + COLUMNS + " FROM incidents WHERE sensor_id = ? ORDER BY created_at DESC";
+            "SELECT " + COLUMNS + " FROM incidents WHERE sensor_id = ? ORDER BY created_at DESC LIMIT ?";
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
@@ -66,8 +66,8 @@ public class IncidentReadRepository {
         return jdbc.query(FIND_BY_ID, rowMapper, incidentId).stream().findFirst().orElse(null);
     }
 
-    public List<IncidentDto> findBySensor(String sensorId) {
-        return jdbc.query(FIND_BY_SENSOR, rowMapper, sensorId);
+    public List<IncidentDto> findBySensor(String sensorId, int limit) {
+        return jdbc.query(FIND_BY_SENSOR, rowMapper, sensorId, limit);
     }
 
     /** Parses a {@code jsonb} array of strings (e.g. {@code ["node-5","bld-12"]}) to a list. */

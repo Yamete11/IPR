@@ -33,7 +33,7 @@ their Kafka/JDBC/AGE scaffolding. Turns the stock Boot skeleton into a working w
 - **Idempotent consumer** — before any Claude call, `SELECT 1 FROM incidents WHERE alert_id=?`; skip
   if present. Insert `ON CONFLICT (alert_id) DO NOTHING`. Survives restarts (no in-memory set).
 - **Claude via the official Anthropic Java SDK** (`com.anthropic:anthropic-java`). Default model
-  `claude-opus-4-8` (property `ai.claude.model`), adaptive thinking, and the SDK's **structured
+  `claude-opus-5` (property `ai.claude.model`), adaptive thinking, and the SDK's **structured
   output** (`.outputConfig(IncidentPlan.class)`) so the plan is typed + schema-validated.
   `AnthropicClient` from `AnthropicOkHttpClient.fromEnv()` (reads `ANTHROPIC_API_KEY`).
 - **Circuit breaker = Resilience4j core** (`io.github.resilience4j:resilience4j-circuitbreaker`),
@@ -71,7 +71,7 @@ Base package `inno.ipr.ai_incident_responder_service`.
   (`@Qualifier("ageJdbc")`): `findMonitoredAsset(sensorId)` + `findImpacted(assetId)` →
   `List<ImpactedObject>` (`domain/ImpactedObject`: id, label, properties).
 - [x] **6. Metric history.** `repository/MetricHistoryRepository.java` (`@Qualifier("timescaleJdbc")`):
-  `findLastHour(sensorId)` → `domain/MetricSummary` (count, min, max, avg, latest, latestAt).
+  `findLastHour(sensorId, metricType)` → `domain/MetricSummary` (count, min, max, avg, latest, latestAt).
 
 ### D. Persistence & Claude output
 - [x] **7. `repository/IncidentRepository.java`** — `existsByAlertId`, `save(Incident)` with
@@ -140,7 +140,9 @@ incidents→read-API chain. Only the **real Claude call** remains unexercised (n
    `infrastructure-alerts.DLQ`, no crash.
 
 ## Deferred
-- Recovery/clear handling; per-metric prompt tuning; retry/backoff for prolonged Claude outage
-  (currently a valid alert can DLQ after retries — production would pause the container instead).
+- Recovery/clear handling; per-metric prompt tuning.
+- ~~Retry/backoff for prolonged Claude outage~~ — done: `KafkaConfig` uses an unlimited
+  `ExponentialBackOff` (1 s → 30 s cap) through a `ContainerPausingBackOffHandler`, so a valid alert
+  is never dead-lettered; only `InvalidAlertException` (poison) goes to the DLQ.
 - Compression/retention on `incidents`. Helm/HPA/K8s Secret for the API key (Stage 4).
 - Next service after this: `incident-api` (read-only GraphQL over `incidents` + metrics).

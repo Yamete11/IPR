@@ -16,7 +16,7 @@ running** (no tests).
 
 **Design contract (from `docs/microservices.md`) — do not re-derive:**
 - `infrastructure-alerts` message (JSON), keyed by `sensor_id`:
-  `{ "alert_id":"a-1001", "sensor_id":"s-00042", "metric_type":"pipe_pressure", "value":0.0, "detected_at":"...Z", "rule":"pressure==0" }`
+  `{ "alert_id":"a-1001", "sensor_id":"s-00042", "metric_type":"pipe_pressure", "value":0.0, "detected_at":"...Z", "rule":"pipe_pressure_min<0.5" }`
 - Reads 5-min **continuous aggregates** / thresholds; **scheduled** (no Kafka consumer).
 - Reads TimescaleDB directly (metrics owned/written by ingestion).
 
@@ -73,7 +73,9 @@ running** (no tests).
   label). Rules (on min/max, tuned to the simulator faults): `pipe_pressure` min<0.5
   (`"pipe_pressure_min<0.5"`); `cable_temperature` max>100 (`"cable_temperature_max>100"`);
   `substation_voltage` min<50 (`"substation_voltage_min<50"`). `evaluate(MetricWindow) ->
-  Optional<Breach{value, rule}>`. Rule set in code (externalising deferred).
+  Optional<Breach{value, rule}>`. Rules are configured in `application.yaml` under `anomaly.rules[]`
+  (bound by `AnomalyRulesProperties`, validated by `ThresholdRuleRegistry`; label derived by
+  `ThresholdRule.of`). Defaults: pipe_pressure min<0.5, cable_temperature max>120, substation_voltage min<50.
 
 ### E. Alert publish + scheduler
 - [x] **7. `alert/Alert.java`** (record) — `alertId, sensorId, metricType, double value, Instant
@@ -135,6 +137,6 @@ across multiple later polls (no re-fire). Two fixes made during the run: `materi
 
 ## Deferred
 
-- Externalising thresholds; per-sensor rules; recovery/clear events on the alert topic.
+- Per-sensor rules; recovery/clear events on the alert topic. (Thresholds are externalised — `anomaly.rules[]`.)
 - Compression/retention policies. HPA/Helm/K8s (Stage 4).
 - Next service: `ai-incident-responder` (consumes `infrastructure-alerts`, reads TimescaleDB + AGE, calls Claude).

@@ -61,7 +61,7 @@ type Metric {
 type Query {
   incidents(limit: Int = 50): [Incident!]!          # most recent first
   incident(id: ID!): Incident                        # by incident_id
-  incidentsBySensor(sensorId: ID!): [Incident!]!
+  incidentsBySensor(sensorId: ID!, limit: Int = 50): [Incident!]!
   recentMetrics(sensorId: ID!, limit: Int = 100): [Metric!]!
 }
 ```
@@ -143,7 +143,7 @@ returned correctly over `POST /graphql`: `incidents` (JSONB arrays surfaced as `
        impacted_objects, remediation_steps, summary, model)
    VALUES ('i-demo','a-demo','s-00042','pipe_pressure','HIGH',
        '["node-5","bld-12","bld-19"]','["Dispatch crew to node-5","Isolate the pipeline"]',
-       'Zero pressure at node-5','claude-opus-4-8');
+       'Zero pressure at node-5','claude-opus-5');
    ```
    (The `metrics`/`incidents` tables must exist first — created by ingestion / ai-incident-responder.)
 3. `cd incident-api-service && ./gradlew bootRun` (add `--args='--spring.profiles.active=dev'` for GraphiQL).

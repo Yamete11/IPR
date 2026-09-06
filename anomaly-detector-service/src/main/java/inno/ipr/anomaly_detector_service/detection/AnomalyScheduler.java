@@ -11,11 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.function.Function;
-
-import static java.util.stream.Collectors.toMap;
 
 /**
  * The detection loop. On a fixed schedule it pulls each series' latest 5-minute window from
@@ -29,19 +25,18 @@ public class AnomalyScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(AnomalyScheduler.class);
 
-    /** Rules indexed by metric type for O(1) lookup per window. */
-    private static final Map<String, ThresholdRule> RULES_BY_METRIC =
-            ThresholdRule.RULES.stream().collect(toMap(ThresholdRule::metricType, Function.identity()));
-
     private final MetricAggregateRepository repository;
     private final AlertPublisher publisher;
+    private final ThresholdRuleRegistry rules;
     private final Duration lookback;
 
     public AnomalyScheduler(MetricAggregateRepository repository,
                             AlertPublisher publisher,
+                            ThresholdRuleRegistry rules,
                             @Value("${anomaly.lookback:15m}") Duration lookback) {
         this.repository = repository;
         this.publisher = publisher;
+        this.rules = rules;
         this.lookback = lookback;
     }
 
@@ -55,11 +50,11 @@ public class AnomalyScheduler {
         log.debug("Polled {} metric windows (lookback {})", windows.size(), lookback);
 
         for (MetricWindow window : windows) {
-            ThresholdRule rule = RULES_BY_METRIC.get(window.metricType());
-            if (rule == null) {
+            Optional<ThresholdRule> rule = rules.forMetric(window.metricType());
+            if (rule.isEmpty()) {
                 continue; // no rule monitors this metric
             }
-            Optional<ThresholdRule.Breach> breach = rule.evaluate(window);
+            Optional<ThresholdRule.Breach> breach = rule.get().evaluate(window);
             if (breach.isPresent()) {
                 publisher.publishIfNew(window.sensorId(), window.metricType(), breach.get());
             } else {
