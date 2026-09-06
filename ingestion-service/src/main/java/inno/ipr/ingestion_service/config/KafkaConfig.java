@@ -43,6 +43,12 @@ import java.util.Map;
  *       Queue pattern that isolates them instead of blocking the partition — while transient
  *       infrastructure failures are retried indefinitely rather than discarded.</li>
  * </ul>
+ *
+ * <p>The listener is a batch listener ({@code spring.kafka.listener.type: batch}). The same
+ * {@link DefaultErrorHandler} handles both modes; per-record classification within a batch relies
+ * on the listener throwing {@code BatchListenerFailedException} with the failing index (see
+ * {@code TelemetryConsumer}). The classifier traverses causes, so the non-retryable types below are
+ * recognised whether they arrive bare or wrapped in that exception.
  */
 @Configuration
 public class KafkaConfig {

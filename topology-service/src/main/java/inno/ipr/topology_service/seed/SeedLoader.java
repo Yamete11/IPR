@@ -49,17 +49,20 @@ public class SeedLoader implements ApplicationRunner {
     private final ResourceLoader resourceLoader;
     private final String location;
     private final String configuredGraph;
+    private final boolean indexEnabled;
 
     public SeedLoader(AgeClient age,
                       ObjectMapper objectMapper,
                       ResourceLoader resourceLoader,
                       @Value("${topology.seed.location:classpath:seed/city-topology.json}") String location,
-                      @Value("${topology.graph:city_topology}") String configuredGraph) {
+                      @Value("${topology.graph:city_topology}") String configuredGraph,
+                      @Value("${topology.seed.index-enabled:true}") boolean indexEnabled) {
         this.age = age;
         this.objectMapper = objectMapper;
         this.resourceLoader = resourceLoader;
         this.location = location;
         this.configuredGraph = configuredGraph;
+        this.indexEnabled = indexEnabled;
     }
 
     @Override
@@ -113,6 +116,15 @@ public class SeedLoader implements ApplicationRunner {
         long edgeCount = age.count(graph, "MATCH ()-[r]->() RETURN count(r)");
         log.info("Seeded '{}': graph now has {} vertices, {} edges (from {} vertex / {} edge seed entries)",
                 graph, vertexCount, edgeCount, seed.vertices().size(), seed.edges().size());
+
+        // Indexes come after the data: AGE materialises a label's table on the first vertex write,
+        // so there is nothing to index before the seed has run.
+        if (indexEnabled) {
+            for (VertexLabel label : VertexLabel.values()) {
+                age.ensurePropertyIndex(graph, label.label());
+            }
+            log.info("Property indexes ensured on '{}' for {} labels", graph, VertexLabel.values().length);
+        }
     }
 
     /** Appends {@code SET var.key = $p_key, ...} for each property and binds the scalar params. */

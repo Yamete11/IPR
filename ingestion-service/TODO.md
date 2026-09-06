@@ -127,6 +127,12 @@ used across topology-service.
 
 ## Deferred (out of scope here)
 
-- `metrics_5m_avg` continuous aggregate + compression/retention → analytics/`anomaly-detector` step.
-- Batch listener + `jdbcTemplate.batchUpdate` throughput optimization.
-- HPA on Kafka lag, Helm chart, K8s/Strimzi deployment → Stage 4.
+- `metrics_5m_avg` continuous aggregate → done in `anomaly-detector-service`.
+- ~~Compression/retention~~ → done (2026-09-06): `schema.sql` sets a 1-day chunk interval, a
+  `(sensor_id, metric_type, timestamp DESC)` index, columnar compression segmented by series, a
+  7-day compression policy and a 30-day retention policy; asserted by
+  `SchemaInitializationIntegrationTest` against the real image.
+- ~~Batch listener + `jdbcTemplate.batchUpdate`~~ → done (2026-09-06): `spring.kafka.listener.type: batch`,
+  `MetricRepository.saveAll` (JDBC batch + `reWriteBatchedInserts=true`), per-record poison isolation via
+  `BatchListenerFailedException` in `TelemetryConsumer`; covered by `KafkaErrorHandlingIntegrationTest`.
+- HPA on Kafka lag, Helm chart, K8s/Strimzi deployment → Stage 4 (`deploy/`).

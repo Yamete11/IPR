@@ -116,6 +116,51 @@ class SchemaInitializationIntegrationTest {
     }
 
     @Test
+    @DisplayName("partitions into 1-day chunks and indexes the series read path")
+    void tunesChunkingAndIndexes() {
+        runSchemaScript(dataSource);
+
+        assertThat(jdbc.queryForObject("""
+                SELECT time_interval::text FROM timescaledb_information.dimensions
+                WHERE hypertable_name = 'metrics' AND column_name = 'timestamp'
+                """, String.class))
+                .as("chunk interval must be the 1 day the script asks for, not TimescaleDB's 7-day default")
+                .isEqualTo("1 day");
+        assertThat(jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = 'metrics_sensor_metric_ts'", String.class))
+                .contains("sensor_id", "metric_type")
+                .contains("\"timestamp\" DESC");
+    }
+
+    @Test
+    @DisplayName("enables columnar compression and schedules the compression + retention policies")
+    void configuresCompressionAndRetention() {
+        runSchemaScript(dataSource);
+
+        assertThat(jdbc.queryForObject(
+                "SELECT compression_enabled FROM timescaledb_information.hypertables WHERE hypertable_name = 'metrics'",
+                Boolean.class))
+                .as("compression must be enabled before a compression policy can be added")
+                .isTrue();
+        assertThat(jdbc.queryForObject("""
+                SELECT segmentby FROM timescaledb_information.hypertable_compression_settings
+                WHERE hypertable = 'metrics'::regclass
+                """, String.class))
+                .contains("sensor_id").contains("metric_type");
+        assertThat(policyJobs())
+                .as("one compression job and one retention job on the hypertable")
+                .containsExactlyInAnyOrder("policy_compression", "policy_retention");
+        assertThat(jdbc.queryForObject("""
+                SELECT config->>'compress_after' FROM timescaledb_information.jobs
+                WHERE hypertable_name = 'metrics' AND proc_name = 'policy_compression'
+                """, String.class)).isEqualTo("7 days");
+        assertThat(jdbc.queryForObject("""
+                SELECT config->>'drop_after' FROM timescaledb_information.jobs
+                WHERE hypertable_name = 'metrics' AND proc_name = 'policy_retention'
+                """, String.class)).isEqualTo("30 days");
+    }
+
+    @Test
     @DisplayName("re-running on an existing schema is a no-op, not an error")
     void isIdempotentAcrossRestarts() {
         runSchemaScript(dataSource);
@@ -124,6 +169,16 @@ class SchemaInitializationIntegrationTest {
 
         assertThat(jdbc.queryForObject("SELECT count(*) FROM pg_indexes WHERE indexname = 'metrics_uq'",
                 Integer.class)).isOne();
+        assertThat(policyJobs())
+                .as("if_not_exists must stop the policies from being registered twice")
+                .containsExactlyInAnyOrder("policy_compression", "policy_retention");
+    }
+
+    private List<String> policyJobs() {
+        return jdbc.queryForList("""
+                SELECT proc_name FROM timescaledb_information.jobs
+                WHERE hypertable_name = 'metrics' AND proc_name IN ('policy_compression', 'policy_retention')
+                """, String.class);
     }
 
     /**

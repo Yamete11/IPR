@@ -69,6 +69,39 @@ public class AgeClient {
     }
 
     /**
+     * Creates a GIN index over the {@code properties} column of one label's vertex table, so a
+     * {@code MATCH (n:Label {id: $id})} lookup — every dependency traversal starts with one — is an
+     * index probe rather than a scan of the label table. AGE stores each label as a plain table
+     * {@code "<graph>"."<Label>"(id graphid, properties agtype)} that only exists once the first
+     * vertex of that label has been written, hence the existence check; on a label the seed never
+     * uses this is a no-op. {@code IF NOT EXISTS} makes it idempotent across restarts.
+     *
+     * <p>{@code label} must already be validated (it comes from the {@code VertexLabel} allow-list),
+     * because like the graph name it is interpolated, not bound.
+     */
+    public void ensurePropertyIndex(String graph, String label) {
+        checkGraphName(graph);
+        if (label == null || !GRAPH_NAME.matcher(label).matches()) {
+            throw new AgeQueryException("Illegal AGE label name: " + label);
+        }
+        try {
+            Integer present = jdbc.queryForObject("""
+                    SELECT count(*) FROM ag_catalog.ag_label l
+                    JOIN ag_catalog.ag_graph g ON g.graphid = l.graph
+                    WHERE g.name = ? AND l.name = ?
+                    """, Integer.class, graph, label);
+            if (present == null || present == 0) {
+                return;
+            }
+            String index = graph + "_" + label + "_props_gin";
+            jdbc.execute("CREATE INDEX IF NOT EXISTS \"" + index + "\" ON \"" + graph + "\".\"" + label
+                    + "\" USING gin (properties)");
+        } catch (RuntimeException e) {
+            throw new AgeQueryException("Failed to ensure property index on '" + graph + "'.'" + label + "'", e);
+        }
+    }
+
+    /**
      * Runs a write Cypher statement. When {@code paramsJson} is non-null it is passed as the
      * agtype parameter map, referenced as {@code $key} inside {@code cypher}.
      *
