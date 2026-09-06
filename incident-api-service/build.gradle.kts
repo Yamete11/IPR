@@ -33,6 +33,12 @@ dependencies {
 	runtimeOnly("org.postgresql:postgresql")
 
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
+	// GraphQlTester slice for the controller test.
+	testImplementation("org.springframework.boot:spring-boot-starter-graphql-test")
+	// Real TimescaleDB for the repository test (self-skips without Docker). Testcontainers 2.x
+	// coordinates, versions from the Boot BOM — see ingestion-service/build.gradle.kts.
+	testImplementation("org.testcontainers:testcontainers-junit-jupiter")
+	testImplementation("org.testcontainers:testcontainers-postgresql")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
