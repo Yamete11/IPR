@@ -1,0 +1,34 @@
+image:
+  repository: smartcity/sensor-simulator
+  tag: dev
+  pullPolicy: IfNotPresent
+global:
+  imageTag: ""
+
+# Off by default; `kubectl scale deploy/sensor-simulator --replicas=1` (or deploy/scripts/demo-hpa.*)
+# starts the load. Each replica is an independent generator emitting the same sensor ids, so keep
+# it at 1 unless you want deliberately colliding timestamps.
+replicaCount: 0
+
+# ~1000 sensors, one reading each every 100 ms: the load profile from the design plan.
+args:
+  - "--extra-sensors"
+  - "997"
+  - "--interval"
+  - "0.1"
+  - "--anomaly-prob"
+  - "0.02"
+
+configMapName: smartcity-config
+waitImage: busybox:1.37
+waitFor:
+  - name: kafka
+    host: smartcity-kafka-bootstrap
+    port: 9092
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi

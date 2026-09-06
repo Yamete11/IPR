@@ -135,4 +135,6 @@ used across topology-service.
 - ~~Batch listener + `jdbcTemplate.batchUpdate`~~ → done (2026-09-06): `spring.kafka.listener.type: batch`,
   `MetricRepository.saveAll` (JDBC batch + `reWriteBatchedInserts=true`), per-record poison isolation via
   `BatchListenerFailedException` in `TelemetryConsumer`; covered by `KafkaErrorHandlingIntegrationTest`.
-- HPA on Kafka lag, Helm chart, K8s/Strimzi deployment → Stage 4 (`deploy/`).
+- ~~HPA on Kafka lag, Helm chart, K8s/Strimzi deployment~~ → packaged 2026-09-06: `Dockerfile`,
+  `deploy/charts/ingestion-service` (KEDA `ScaledObject`, lagThreshold 1000, 1→6 replicas), Strimzi
+  topics in `deploy/strimzi/topics.yaml`. Cluster run still to be exercised on an idle machine.

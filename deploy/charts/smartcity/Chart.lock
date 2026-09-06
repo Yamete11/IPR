@@ -1,0 +1,24 @@
+dependencies:
+- name: smartcity-infra
+  repository: file://../smartcity-infra
+  version: 0.1.0
+- name: topology-service
+  repository: file://../topology-service
+  version: 0.1.0
+- name: ingestion-service
+  repository: file://../ingestion-service
+  version: 0.1.0
+- name: anomaly-detector-service
+  repository: file://../anomaly-detector-service
+  version: 0.1.0
+- name: ai-incident-responder-service
+  repository: file://../ai-incident-responder-service
+  version: 0.1.0
+- name: incident-api-service
+  repository: file://../incident-api-service
+  version: 0.1.0
+- name: sensor-simulator
+  repository: file://../sensor-simulator
+  version: 0.1.0
+digest: sha256:6a941712c292de6d9e25bb9749fd9043002231cf9ed1a71da4d4677a50fccd7c
+generated: "2026-09-06T17:55:05.8004467+02:00"

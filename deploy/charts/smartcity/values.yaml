@@ -1,0 +1,25 @@
+# One image tag for every service image built by deploy/scripts/build-images.*.
+global:
+  imageTag: dev
+
+infra:
+  enabled: true
+
+# Sub-chart values are keyed by chart name; anything not listed keeps the sub-chart's defaults.
+# Credentials and the Anthropic key are normally passed with --set from .env by deploy/scripts/up.*
+# rather than committed here.
+smartcity-infra:
+  postgres:
+    user: smartcity
+    password: smartcity
+  anthropic:
+    apiKey: ""
+  config:
+    AI_CLAUDE_MOCK: "true"
+
+ingestion-service:
+  autoscaling:
+    enabled: true
+
+sensor-simulator:
+  replicaCount: 0

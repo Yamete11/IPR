@@ -1,0 +1,57 @@
+# Kafka via the Strimzi operator: a single KRaft node carrying both the controller and broker
+# roles (no ZooKeeper), with persistent storage, and the Topic Operator so topics are declared as
+# KafkaTopic custom resources (deploy/strimzi/topics.yaml). Replication settings are pinned to 1
+# because there is one broker; a real cluster raises them and the node-pool replica count.
+#
+# Apply after `helm install strimzi oci://quay.io/strimzi-helm/strimzi-kafka-operator` (Strimzi 1.x:
+# KRaft + node pools are the only mode and the CRDs are served as kafka.strimzi.io/v1).
+# The bootstrap address inside the cluster is smartcity-kafka-bootstrap:9092.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: smartcity
+  labels:
+    strimzi.io/cluster: smartcity
+spec:
+  replicas: 1
+  roles:
+    - controller
+    - broker
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 5Gi
+        deleteClaim: true
+        kraftMetadata: shared
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: smartcity
+  namespace: smartcity
+spec:
+  kafka:
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      offsets.topic.replication.factor: 1
+      transaction.state.log.replication.factor: 1
+      transaction.state.log.min.isr: 1
+      default.replication.factor: 1
+      min.insync.replicas: 1
+      # Topics are declared as KafkaTopic resources; keep the services' KafkaAdmin from racing them.
+      auto.create.topics.enable: false
+  entityOperator:
+    topicOperator: {}

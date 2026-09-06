@@ -1,0 +1,58 @@
+# Image built by deploy/scripts/build-images.* and loaded into the Kind cluster.
+image:
+  repository: smartcity/ingestion-service
+  tag: dev
+  pullPolicy: IfNotPresent
+# The umbrella chart sets global.imageTag once for every service; leave empty when standalone.
+global:
+  imageTag: ""
+
+replicaCount: 1
+containerPort: 8080
+service:
+  port: 8080
+
+# Broker/database addresses come from the shared ConfigMap, credentials from Secrets (both created
+# by the smartcity-infra chart).
+configMapName: smartcity-config
+secretRefs:
+  - name: postgres-credentials
+
+# Extra environment variables for this container.
+env: []
+
+# Init containers that block until a dependency accepts TCP connections.
+waitImage: busybox:1.37
+waitFor:
+  - name: timescaledb
+    host: timescaledb
+    port: 5432
+  - name: kafka
+    host: smartcity-kafka-bootstrap
+    port: 9092
+extraInitContainers: []
+
+probes:
+  # JVM start + schema init can take a while on a cold Kind node: 30 x 5 s before liveness kicks in.
+  startupFailureThreshold: 30
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+
+# KEDA ScaledObject on Kafka consumer lag (see templates/scaledobject.yaml). maxReplicas must not
+# exceed the partition count of city-telemetry (6 in deploy/strimzi/topics.yaml).
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 6
+  pollingInterval: 10
+  cooldownPeriod: 120
+  kafka:
+    bootstrapServers: smartcity-kafka-bootstrap.smartcity.svc:9092
+    consumerGroup: ingestion-service
+    topic: city-telemetry
+    lagThreshold: 1000

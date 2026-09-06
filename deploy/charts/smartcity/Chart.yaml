@@ -1,0 +1,32 @@
+apiVersion: v2
+name: smartcity
+description: Umbrella chart installing the whole Smart City telemetry + AI incident-response system (infra + six services)
+type: application
+version: 0.1.0
+appVersion: "0.0.1-SNAPSHOT"
+# Local file dependencies; run `helm dependency build deploy/charts/smartcity` before installing
+# (deploy/scripts/up.* does). Kafka is not here: it is a Strimzi custom resource applied from
+# deploy/strimzi/ once the operator is installed.
+dependencies:
+  - name: smartcity-infra
+    version: 0.1.0
+    repository: file://../smartcity-infra
+    condition: infra.enabled
+  - name: topology-service
+    version: 0.1.0
+    repository: file://../topology-service
+  - name: ingestion-service
+    version: 0.1.0
+    repository: file://../ingestion-service
+  - name: anomaly-detector-service
+    version: 0.1.0
+    repository: file://../anomaly-detector-service
+  - name: ai-incident-responder-service
+    version: 0.1.0
+    repository: file://../ai-incident-responder-service
+  - name: incident-api-service
+    version: 0.1.0
+    repository: file://../incident-api-service
+  - name: sensor-simulator
+    version: 0.1.0
+    repository: file://../sensor-simulator

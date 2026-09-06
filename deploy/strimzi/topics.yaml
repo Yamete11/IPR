@@ -1,0 +1,53 @@
+# The four topics of the pipeline, owned by the Strimzi Topic Operator. Kubernetes resource names
+# must be DNS-1123, so the `.DLQ` topics carry their real Kafka name in spec.topicName.
+#
+# city-telemetry has 6 partitions: that is the ceiling for the ingestion-service consumer group
+# (KEDA scales it up to 6 replicas). The services' own NewTopic beans become no-ops because the
+# topics already exist, and never shrink them.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: city-telemetry
+  namespace: smartcity
+  labels:
+    strimzi.io/cluster: smartcity
+spec:
+  partitions: 6
+  replicas: 1
+  config:
+    retention.ms: 86400000
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: city-telemetry-dlq
+  namespace: smartcity
+  labels:
+    strimzi.io/cluster: smartcity
+spec:
+  topicName: city-telemetry.DLQ
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: infrastructure-alerts
+  namespace: smartcity
+  labels:
+    strimzi.io/cluster: smartcity
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: infrastructure-alerts-dlq
+  namespace: smartcity
+  labels:
+    strimzi.io/cluster: smartcity
+spec:
+  topicName: infrastructure-alerts.DLQ
+  partitions: 3
+  replicas: 1

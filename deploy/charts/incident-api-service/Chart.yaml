@@ -1,0 +1,6 @@
+apiVersion: v2
+name: incident-api-service
+description: Read-only GraphQL over incidents + metrics for the dashboard
+type: application
+version: 0.1.0
+appVersion: "0.0.1-SNAPSHOT"

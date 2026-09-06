@@ -1,0 +1,8 @@
+# Keep the image build context to what the Dockerfile copies.
+build/
+.gradle/
+.idea/
+*.iml
+bin/
+out/
+src/test/

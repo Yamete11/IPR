@@ -1,0 +1,6 @@
+apiVersion: v2
+name: anomaly-detector-service
+description: Polls the 5-minute continuous aggregate and publishes infrastructure-alerts
+type: application
+version: 0.1.0
+appVersion: "0.0.1-SNAPSHOT"

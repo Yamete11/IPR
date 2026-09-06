@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ingestion-service
+description: Kafka city-telemetry -> TimescaleDB metrics hypertable; scaled by KEDA on consumer lag
+type: application
+version: 0.1.0
+appVersion: "0.0.1-SNAPSHOT"

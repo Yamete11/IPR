@@ -1,0 +1,11 @@
+# Local cluster for the Smart City system: one control plane and two workers, so the KEDA
+# scale-out of ingestion-service is visible across nodes. No host port mappings — reach the
+# GraphQL services with `kubectl port-forward` (see deploy/README.md).
+#   kind create cluster --name smartcity --config deploy/kind/kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: smartcity
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

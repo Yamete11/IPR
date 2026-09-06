@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ai-incident-responder-service
+description: Consumes infrastructure-alerts, gathers context, calls Claude, writes incidents
+type: application
+version: 0.1.0
+appVersion: "0.0.1-SNAPSHOT"

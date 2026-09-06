@@ -1,0 +1,6 @@
+apiVersion: v2
+name: smartcity-infra
+description: The two PostgreSQL instances (age-db, timescaledb) as StatefulSets, plus the shared ConfigMap and Secrets every service reads
+type: application
+version: 0.1.0
+appVersion: "pg16"

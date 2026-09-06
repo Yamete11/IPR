@@ -1,0 +1,2 @@
+# `helm dependency build` packages the local sub-charts here; they are rebuilt on every up.
+charts/smartcity/charts/

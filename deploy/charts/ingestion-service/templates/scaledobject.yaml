@@ -1,0 +1,29 @@
+{{- if .Values.autoscaling.enabled }}
+# KEDA scales the ingestion consumer on Kafka consumer-group lag. KEDA reads the lag straight
+# from the broker and owns the HorizontalPodAutoscaler it creates, so no Prometheus adapter or
+# metrics-server is needed. The ceiling is the partition count of city-telemetry: consumers beyond
+# that sit idle.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "svc.name" . }}
+  labels:
+    {{- include "svc.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "svc.name" . }}
+  minReplicaCount: {{ .Values.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.autoscaling.maxReplicas }}
+  pollingInterval: {{ .Values.autoscaling.pollingInterval }}
+  cooldownPeriod: {{ .Values.autoscaling.cooldownPeriod }}
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: {{ .Values.autoscaling.kafka.bootstrapServers }}
+        consumerGroup: {{ .Values.autoscaling.kafka.consumerGroup }}
+        topic: {{ .Values.autoscaling.kafka.topic }}
+        lagThreshold: {{ .Values.autoscaling.kafka.lagThreshold | quote }}
+        activationLagThreshold: "0"
+        offsetResetPolicy: earliest
+        allowIdleConsumers: "false"
+{{- end }}

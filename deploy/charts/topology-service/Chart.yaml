@@ -1,0 +1,6 @@
+apiVersion: v2
+name: topology-service
+description: Seeds and serves the AGE topology graph (GraphQL read API)
+type: application
+version: 0.1.0
+appVersion: "0.0.1-SNAPSHOT"

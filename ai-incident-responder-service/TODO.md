@@ -144,5 +144,8 @@ incidents→read-API chain. Only the **real Claude call** remains unexercised (n
 - ~~Retry/backoff for prolonged Claude outage~~ — done: `KafkaConfig` uses an unlimited
   `ExponentialBackOff` (1 s → 30 s cap) through a `ContainerPausingBackOffHandler`, so a valid alert
   is never dead-lettered; only `InvalidAlertException` (poison) goes to the DLQ.
-- Compression/retention on `incidents`. Helm/HPA/K8s Secret for the API key (Stage 4).
+- Compression/retention on `incidents`. ~~Helm/HPA/K8s Secret for the API key (Stage 4)~~ → packaged
+  2026-09-06: `Dockerfile`, `deploy/charts/ai-incident-responder-service` (optional `anthropic` Secret via
+  `envFrom`, created by `deploy/charts/smartcity-infra` when `anthropic.apiKey` is set). Cluster run
+  still to be exercised.
 - Next service after this: `incident-api` (read-only GraphQL over `incidents` + metrics).

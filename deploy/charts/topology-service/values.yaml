@@ -1,0 +1,41 @@
+# Image built by deploy/scripts/build-images.* and loaded into the Kind cluster.
+image:
+  repository: smartcity/topology-service
+  tag: dev
+  pullPolicy: IfNotPresent
+# The umbrella chart sets global.imageTag once for every service; leave empty when standalone.
+global:
+  imageTag: ""
+
+replicaCount: 1
+containerPort: 8080
+service:
+  port: 8080
+
+# Broker/database addresses come from the shared ConfigMap, credentials from Secrets (both created
+# by the smartcity-infra chart).
+configMapName: smartcity-config
+secretRefs:
+  - name: postgres-credentials
+
+# Extra environment variables for this container.
+env: []
+
+# Init containers that block until a dependency accepts TCP connections.
+waitImage: busybox:1.37
+waitFor:
+  - name: age-db
+    host: age-db
+    port: 5432
+extraInitContainers: []
+
+probes:
+  # JVM start + schema init can take a while on a cold Kind node: 30 x 5 s before liveness kicks in.
+  startupFailureThreshold: 30
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 1Gi

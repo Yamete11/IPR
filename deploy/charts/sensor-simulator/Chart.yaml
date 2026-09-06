@@ -1,0 +1,6 @@
+apiVersion: v2
+name: sensor-simulator
+description: Python load generator producing telemetry to Kafka city-telemetry (scaled to 0 by default)
+type: application
+version: 0.1.0
+appVersion: "0.0.1-SNAPSHOT"

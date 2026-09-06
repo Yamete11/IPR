@@ -8,7 +8,7 @@ Claude **may author and edit source code** in this repository. The user lifted t
 
 Follow the design documents and conventions below; when a change is large or ambiguous, confirm the approach before writing a lot of code.
 
-## Project status: all six services implemented; Stage 4 (Kubernetes) in progress
+## Project status: all six services implemented; Stage 4 (Kubernetes) packaged, cluster run pending
 
 This repository is design documents plus **six implemented services** (five standalone Gradle projects on Java 25 / Spring Boot 4.1.0, plus the Python simulator). A requirements audit on 2026-09-06 found Stages 1–3 complete and Stage 4 (Docker/Helm/K8s) not started; the remediation work is tracked below and in the root `README.md`.
 
@@ -44,6 +44,8 @@ cd sensor-simulator && python -m venv .venv && ./.venv/Scripts/python.exe -m pip
 ```
 
 Local backing services (`docker-compose.yml`, repo root): `age-db` (5432), `timescaledb` (5433), `kafka` (KRaft, 9092). Run `ingestion-service` end-to-end with `docker compose up -d timescaledb kafka` then `cd ingestion-service && ./gradlew bootRun`.
+
+**Stage 4 packaging (`deploy/`, added 2026-09-06):** every service has a multi-stage `Dockerfile` (`eclipse-temurin:25-jdk` build with the committed wrapper → `eclipse-temurin:25-jre` runtime, layered jar, `USER 1000:1000`); `deploy/charts/<service>` is one Helm chart per service (Deployment + Service + probes + `nc` init-container waits; ingestion adds a KEDA `ScaledObject` on `city-telemetry` consumer lag, max 6 = partition count); `deploy/charts/smartcity-infra` holds the two Postgres StatefulSets, the `smartcity-config` ConfigMap and the `postgres-credentials`/`anthropic` Secrets; `deploy/charts/smartcity` is the umbrella (file:// deps; run `helm dependency build` first — `deploy/scripts/up.*` does). Kafka is a Strimzi **1.x** `Kafka` + `KafkaNodePool` (API `kafka.strimzi.io/v1`, KRaft only) in `deploy/strimzi/`, topics as `KafkaTopic` CRs. Runbook: `deploy/README.md`; scripts: `deploy/scripts/{up,build-images,demo-hpa,down}.{ps1,sh}`. Verified so far: `helm lint` on all 8 charts, a full `helm template` render (20 resources), and Docker builds of `ingestion-service`, `topology-service` and `sensor-simulator` (the other three Dockerfiles are identical apart from the name). **Not yet verified:** a full Kind bring-up — the first attempt on 2026-09-06 was cut short because the 16 GB host was saturated by other workloads; re-run `deploy/scripts/up.ps1` on an idle machine.
 
 > **Boot 4 note:** autoconfiguration is modularised — depend on `spring-boot-starter-<tech>` (e.g. `spring-boot-starter-kafka`), not the raw framework jar, or Boot ships no autoconfig for it (silent no-op).
 

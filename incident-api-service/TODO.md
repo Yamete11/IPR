@@ -157,4 +157,5 @@ returned correctly over `POST /graphql`: `incidents` (JSONB arrays surfaced as `
 
 ## Deferred
 - Pagination/cursors, criticality/time-range filters, subscriptions for live dashboard updates.
-- Auth on the endpoint; Helm/HPA/K8s (Stage 4). This is the final service in the design.
+- Auth on the endpoint. ~~Helm/HPA/K8s (Stage 4)~~ → packaged 2026-09-06: `Dockerfile`,
+  `deploy/charts/incident-api-service` (port 8081). This is the final service in the design.

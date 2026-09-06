@@ -1,0 +1,6 @@
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+test_sensor_simulator.py
+requirements-dev.txt

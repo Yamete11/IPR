@@ -1,0 +1,46 @@
+# Non-secret settings every service reads through envFrom (ConfigMap `smartcity-config`). The
+# names match the placeholders in each service's application.yaml. Both databases listen on 5432
+# inside the cluster (the 5433 in docker-compose.yml is only a host-port trick).
+config:
+  KAFKA_BOOTSTRAP: smartcity-kafka-bootstrap:9092
+  AGE_HOST: age-db
+  AGE_PORT: "5432"
+  TIMESCALE_HOST: timescaledb
+  TIMESCALE_PORT: "5432"
+  # Fallback for anything still reading the single-host name.
+  POSTGRES_HOST: timescaledb
+  POSTGRES_DB: smartcity
+  # Offline planner by default; flip to "false" (and provide anthropic.apiKey) for real Claude calls.
+  AI_CLAUDE_MOCK: "true"
+  AI_CLAUDE_MODEL: claude-opus-5
+  # A cold cluster can take a while before ingestion-service has created the hypertable.
+  ANOMALY_SCHEMA_WAIT_TIMEOUT: 15m
+
+# Secret `postgres-credentials`, shared by both StatefulSets and every service.
+postgres:
+  user: smartcity
+  password: smartcity
+
+# Secret `anthropic` is created only when a key is given (deploy/scripts/up.* reads it from .env).
+anthropic:
+  apiKey: ""
+
+ageDb:
+  image: apache/age:release_PG16_1.6.0
+  storage: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+timescaledb:
+  image: timescale/timescaledb:2.28.3-pg16
+  storage: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi

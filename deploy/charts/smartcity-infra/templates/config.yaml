@@ -1,0 +1,48 @@
+# Addresses and non-secret settings (ConfigMap) — credentials live in the Secrets below.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: smartcity-config
+  labels:
+    app.kubernetes.io/part-of: smartcity
+data:
+  {{- range $key, $value := .Values.config }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  labels:
+    app.kubernetes.io/part-of: smartcity
+type: Opaque
+stringData:
+  POSTGRES_USER: {{ .Values.postgres.user | quote }}
+  POSTGRES_PASSWORD: {{ .Values.postgres.password | quote }}
+{{- if .Values.anthropic.apiKey }}
+---
+# Read by ai-incident-responder-service through the SDK's ANTHROPIC_API_KEY lookup. Absent (and
+# optional on the consuming side) when the responder runs in mock mode.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic
+  labels:
+    app.kubernetes.io/part-of: smartcity
+type: Opaque
+stringData:
+  ANTHROPIC_API_KEY: {{ .Values.anthropic.apiKey | quote }}
+{{- end }}
+---
+# First-boot init for age-db: create the AGE extension. The graph itself is created by
+# topology-service's seed loader. Same content as docker/age/init/01-age.sql.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: age-init
+  labels:
+    app.kubernetes.io/part-of: smartcity
+data:
+  01-age.sql: |
+    CREATE EXTENSION IF NOT EXISTS age;
