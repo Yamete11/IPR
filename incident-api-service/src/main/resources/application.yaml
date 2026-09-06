@@ -4,9 +4,10 @@ spring:
 
   # TimescaleDB — the single datasource. Reads the incidents table (written by
   # ai-incident-responder) and the metrics hypertable (written by ingestion); owns neither, so there
-  # is no spring.sql.init here. TIMESCALE_PORT matches the host port docker-compose.yml publishes.
+  # is no spring.sql.init here. TIMESCALE_HOST overrides POSTGRES_HOST when the two databases live
+  # on different hosts (Kubernetes); TIMESCALE_PORT matches the host port docker-compose.yml publishes.
   datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${TIMESCALE_PORT:5433}/${POSTGRES_DB:smartcity}
+    url: jdbc:postgresql://${TIMESCALE_HOST:${POSTGRES_HOST:localhost}}:${TIMESCALE_PORT:5433}/${POSTGRES_DB:smartcity}
     username: ${POSTGRES_USER:smartcity}
     password: ${POSTGRES_PASSWORD:smartcity}
     driver-class-name: org.postgresql.Driver
@@ -18,14 +19,21 @@ server:
   # Distinct from topology-service (8080) so both GraphQL services can run locally at once.
   port: ${SERVER_PORT:8081}
 
+# Liveness/readiness probes for Kubernetes plus the Prometheus scrape endpoint. The readiness
+# group includes the datasource(s) so a pod is not routed to while its database is unreachable.
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: when-authorized
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
 
 ---
 # Dev-only: expose the interactive GraphiQL console and the schema printer endpoint.

@@ -2,9 +2,11 @@ spring:
   application:
     name: ingestion-service
 
-  # TimescaleDB (metrics). TIMESCALE_PORT matches the host port docker-compose.yml publishes.
+  # TimescaleDB (metrics). TIMESCALE_HOST overrides POSTGRES_HOST when the two databases live on
+  # different hosts (Kubernetes); TIMESCALE_PORT matches the host port docker-compose.yml publishes.
+  # reWriteBatchedInserts turns the consumer's JDBC batch into one multi-row INSERT round trip.
   datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${TIMESCALE_PORT:5433}/${POSTGRES_DB:smartcity}
+    url: jdbc:postgresql://${TIMESCALE_HOST:${POSTGRES_HOST:localhost}}:${TIMESCALE_PORT:5433}/${POSTGRES_DB:smartcity}?reWriteBatchedInserts=true
     username: ${POSTGRES_USER:smartcity}
     password: ${POSTGRES_PASSWORD:smartcity}
     driver-class-name: org.postgresql.Driver
@@ -27,12 +29,33 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: earliest
       enable-auto-commit: false
+      # Batch sizing: up to 500 records per poll, and wait up to 500 ms for 64 KB to accumulate so
+      # a quiet topic still hands the listener something worth batching.
+      max-poll-records: 500
+      fetch-min-size: 64KB
+      properties:
+        fetch.max.wait.ms: 500
+    listener:
+      # The listener takes List<ConsumerRecord> and writes one JDBC batch per poll (see
+      # consumer/TelemetryConsumer for how a single poison record is isolated from the batch).
+      type: batch
 
+server:
+  port: ${SERVER_PORT:8080}
+
+# health/readiness probes for Kubernetes, plus the Prometheus scrape endpoint (consumer lag,
+# JVM, HTTP). The readiness group includes the datasource so a pod is not routed to while
+# TimescaleDB is unreachable.
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: when-authorized
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db

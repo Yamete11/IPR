@@ -4,10 +4,12 @@ spring:
 
   # Two datasources — this service reads BOTH PostgreSQL instances. Bound directly onto Hikari
   # (see config/DataSourceConfig): keys are Hikari's (jdbc-url, connection-init-sql, ...).
+  # TIMESCALE_HOST / AGE_HOST override POSTGRES_HOST when the two databases live on different
+  # hosts (two Services in Kubernetes); locally both default to POSTGRES_HOST.
   datasource:
     # TimescaleDB (metrics history + incidents). Primary — spring.sql.init targets this one.
     timescale:
-      jdbc-url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${TIMESCALE_PORT:5433}/${POSTGRES_DB:smartcity}
+      jdbc-url: jdbc:postgresql://${TIMESCALE_HOST:${POSTGRES_HOST:localhost}}:${TIMESCALE_PORT:5433}/${POSTGRES_DB:smartcity}
       username: ${POSTGRES_USER:smartcity}
       password: ${POSTGRES_PASSWORD:smartcity}
       driver-class-name: org.postgresql.Driver
@@ -15,7 +17,7 @@ spring:
       maximum-pool-size: 5
     # age-db (topology graph). connection-init-sql puts ag_catalog on the search_path so cypher() resolves.
     age:
-      jdbc-url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${AGE_PORT:5432}/${POSTGRES_DB:smartcity}
+      jdbc-url: jdbc:postgresql://${AGE_HOST:${POSTGRES_HOST:localhost}}:${AGE_PORT:5432}/${POSTGRES_DB:smartcity}
       username: ${POSTGRES_USER:smartcity}
       password: ${POSTGRES_PASSWORD:smartcity}
       driver-class-name: org.postgresql.Driver
@@ -47,11 +49,21 @@ ai:
     model: ${AI_CLAUDE_MODEL:claude-opus-5}
     mock: ${AI_CLAUDE_MOCK:false}
 
+server:
+  port: ${SERVER_PORT:8080}
+
+# Liveness/readiness probes for Kubernetes plus the Prometheus scrape endpoint. The readiness
+# group includes the datasource(s) so a pod is not routed to while its database is unreachable.
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: when-authorized
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db

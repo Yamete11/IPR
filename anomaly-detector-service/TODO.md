@@ -138,5 +138,7 @@ across multiple later polls (no re-fire). Two fixes made during the run: `materi
 ## Deferred
 
 - Per-sensor rules; recovery/clear events on the alert topic. (Thresholds are externalised — `anomaly.rules[]`.)
+- Startup now waits for the `metrics` hypertable (`anomaly.schema.wait-timeout`, default 5 m) instead of
+  failing when ingestion-service has not created it yet.
 - Compression/retention policies. HPA/Helm/K8s (Stage 4).
 - Next service: `ai-incident-responder` (consumes `infrastructure-alerts`, reads TimescaleDB + AGE, calls Claude).

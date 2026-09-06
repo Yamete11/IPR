@@ -25,6 +25,10 @@ dependencies {
 	// Jackson 3 ObjectMapper — used to parse the incidents JSONB array columns into List<String>.
 	implementation("org.springframework.boot:spring-boot-starter-json")
 	implementation("org.springframework.boot:spring-boot-starter-actuator")
+	// Boot 4 splits metrics out of the actuator starter: this starter wires Micrometer, the registry
+	// exposes /actuator/prometheus.
+	implementation("org.springframework.boot:spring-boot-starter-micrometer-metrics")
+	runtimeOnly("io.micrometer:micrometer-registry-prometheus")
 
 	runtimeOnly("org.postgresql:postgresql")
 

@@ -22,6 +22,10 @@ dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-graphql")
 	implementation("org.springframework.boot:spring-boot-starter-jdbc")
 	implementation("org.springframework.boot:spring-boot-starter-actuator")
+	// Boot 4 splits metrics out of the actuator starter: this starter wires Micrometer, the registry
+	// exposes /actuator/prometheus.
+	implementation("org.springframework.boot:spring-boot-starter-micrometer-metrics")
+	runtimeOnly("io.micrometer:micrometer-registry-prometheus")
 
 	runtimeOnly("org.postgresql:postgresql")
 

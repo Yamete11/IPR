@@ -19,9 +19,16 @@ repositories {
 
 dependencies {
 	implementation("org.springframework.boot:spring-boot-starter")
+	// The service has no HTTP API of its own; the web starter exists so the actuator can serve
+	// /actuator/health/{liveness,readiness} to Kubernetes probes and /actuator/prometheus to a scraper.
+	implementation("org.springframework.boot:spring-boot-starter-web")
 	implementation("org.springframework.boot:spring-boot-starter-jdbc")
 	implementation("org.springframework.boot:spring-boot-starter-json")
 	implementation("org.springframework.boot:spring-boot-starter-actuator")
+	// Boot 4 splits metrics out of the actuator starter: this starter wires Micrometer (including the
+	// Kafka consumer metrics spring-kafka registers), the registry exposes them in Prometheus format.
+	implementation("org.springframework.boot:spring-boot-starter-micrometer-metrics")
+	runtimeOnly("io.micrometer:micrometer-registry-prometheus")
 	// Boot 4 modularised autoconfiguration: the raw `spring-kafka` jar has no Boot autoconfig
 	// (no KafkaTemplate/KafkaAdmin/listener-container beans). The starter pulls the `spring-boot-kafka`
 	// autoconfig module alongside spring-kafka.
