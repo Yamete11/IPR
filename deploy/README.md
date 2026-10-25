@@ -29,7 +29,9 @@ the committed Gradle wrapper, JRE 25 runtime with the Boot jar exploded into lay
 ## Prerequisites
 
 Docker Desktop, `kind`, `kubectl`, `helm` (v3.8+ for OCI charts; Helm 4 works). About 6 GB of
-RAM for Docker: Kafka, two databases and six JVMs.
+RAM for Docker: Kafka, two databases and six JVMs. Stop other container stacks first: with an
+8 GB Docker VM shared with another compose project, pods restarted under memory pressure and the
+Kind API server dropped connections (observed on 2026-10-25).
 
 ```
 cp .env.example .env     # credentials for the Secrets; ANTHROPIC_API_KEY only for real Claude calls
@@ -79,6 +81,10 @@ dashboard-...                                    1/1     Running
 ```
 
 `sensor-simulator` exists as a Deployment with 0 replicas.
+
+Watching the cluster: `kubectl -n smartcity get pods -w` in a terminal, or a UI such as k9s
+(`winget install Derailed.k9s`, then `k9s -n smartcity`) or Headlamp. Docker Desktop's Kubernetes
+tab shows only its own built-in cluster, not Kind.
 
 ## Start-up ordering
 
@@ -163,6 +169,15 @@ Chart-only changes: `.\deploy\scripts\up.ps1 -SkipCluster -SkipImages`.
 .\deploy\scripts\down.ps1
 ```
 
+## Verification status
+
+First real run on 2026-10-25 (kind v0.32 / Kubernetes 1.36, Strimzi 1.3 / Kafka 4.3.1, KEDA,
+Helm 4.2): cluster, Kafka and all four topics Ready, KEDA installed, all 7 images built and loaded,
+Helm release installed, every service pod Running/Ready after the two fixes listed under Notes.
+Not yet verified: all pods healthy at once, the `demo-hpa` scale-out, incidents produced in the
+cluster, and the dashboard via port-forward; the run was cut short by memory pressure from another
+compose stack sharing the Docker VM. Resume with `up.ps1 -SkipImages` and `demo-hpa.ps1`.
+
 ## Notes and limits
 
 - Single-broker Kafka: replication factors are 1. Raise `replicas` in `strimzi/kafka.yaml` and
@@ -171,5 +186,12 @@ Chart-only changes: `.\deploy\scripts\up.ps1 -SkipCluster -SkipImages`.
   `city-telemetry`. Change both together.
 - The databases keep their data in PersistentVolumeClaims on Kind's default storage class; they
   disappear with the cluster.
+- TimescaleDB's image runs `timescaledb-tune` on first boot, which sizes `max_connections` from the
+  memory limit (25 at 2Gi), too few for every service's Hikari pool plus a scaled-out ingestion.
+  The StatefulSet overrides it on the command line (`smartcity-infra` value
+  `timescaledb.maxConnections`, default 150).
+- The PowerShell scripts run native commands (kind, helm, docker, kubectl) with
+  `ErrorActionPreference = Continue` and check `$LASTEXITCODE`: under `Stop`, Windows PowerShell 5.1
+  aborts on the first progress line those tools print to stderr whenever output is redirected.
 - `bootBuildImage` (Paketo buildpacks) is a Dockerfile-free alternative for the Java images:
   `./gradlew bootBuildImage --imageName smartcity/<service>:dev`, then `kind load` as usual.
