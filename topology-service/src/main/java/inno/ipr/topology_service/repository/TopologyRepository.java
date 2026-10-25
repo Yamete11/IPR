@@ -1,7 +1,10 @@
 package inno.ipr.topology_service.repository;
 
 import inno.ipr.topology_service.age.AgtypeParser;
+import inno.ipr.topology_service.graphql.dto.CrewDto;
 import inno.ipr.topology_service.graphql.dto.EdgeDto;
+import inno.ipr.topology_service.graphql.dto.ImpactSummaryDto;
+import inno.ipr.topology_service.graphql.dto.PathDto;
 import inno.ipr.topology_service.graphql.dto.VertexDto;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -10,6 +13,7 @@ import org.springframework.stereotype.Repository;
 import tools.jackson.databind.ObjectMapper;
 
 import java.sql.Types;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -37,6 +41,9 @@ public class TopologyRepository {
      * plus a sensor hop), so a bound of 10 covers it comfortably while capping worst-case cost.
      */
     private static final int MAX_DEPTH = 10;
+
+    /** Upper bound on {@code paths(limit:)}; each path is a separate enumerated walk. */
+    private static final int MAX_PATHS = 20;
 
     private final JdbcTemplate jdbc;
     private final AgtypeParser agtype;
@@ -145,11 +152,110 @@ public class TopologyRepository {
         return queryById(sql, id);
     }
 
-    private List<VertexDto> queryById(String sql, String id) {
-        String paramsJson = objectMapper.writeValueAsString(Map.of("id", id));
+    /**
+     * Cypher aggregation over the same walk as {@link #findDependents(String)}: {@code WITH DISTINCT d}
+     * collapses the many paths to one row per dependent, then {@code count}/{@code sum} with
+     * {@code label(d)} as the only non-aggregate column group by label (Cypher's implicit GROUP BY).
+     * {@code coalesce} because only buildings carry {@code apartments}. Totals are summed here from
+     * the per-label rows.
+     */
+    public ImpactSummaryDto impactSummary(String id) {
+        String sql = """
+                SELECT * FROM cypher('%s', $$
+                    MATCH (n {id: $id})-[*1..%d]->(d)
+                    WHERE label(n) <> 'Sensor' AND label(d) <> 'Sensor'
+                    WITH DISTINCT d
+                    RETURN label(d), count(d), sum(coalesce(d.apartments, 0))
+                $$, ?::agtype) AS (label agtype, objects agtype, apartments agtype)
+                """.formatted(graph, MAX_DEPTH);
+        record Row(String label, long objects, long apartments) {
+        }
+        List<Row> rows = jdbc.query(sql,
+                ps -> ps.setObject(1, params(Map.of("id", id)), Types.OTHER),
+                (rs, rowNum) -> new Row(
+                        agtype.parseScalar(rs.getString("label")),
+                        agtype.parseLong(rs.getString("objects")),
+                        agtype.parseLong(rs.getString("apartments"))));
+        List<ImpactSummaryDto.LabelCountDto> byLabel = rows.stream()
+                .sorted(Comparator.comparing(Row::label))
+                .map(r -> new ImpactSummaryDto.LabelCountDto(r.label(), r.objects()))
+                .toList();
+        return new ImpactSummaryDto(id,
+                rows.stream().mapToLong(Row::objects).sum(),
+                rows.stream().mapToLong(Row::apartments).sum(),
+                byLabel);
+    }
+
+    /**
+     * Path finding: every directed path from {@code from} to {@code to}, shortest first. AGE 1.6.0 has
+     * no {@code shortestPath()}, so the bounded variable-length match binds the whole path {@code p}
+     * and {@code ORDER BY length(p)} ranks them. No label filters — a path from a sensor through its
+     * SensorLink to a building is a legitimate answer here. {@code nodes(p)} is returned whole
+     * (list comprehensions over it fail in AGE 1.6.0) and parsed by {@link AgtypeParser#parseVertexList}.
+     */
+    public List<PathDto> findPaths(String from, String to, int limit) {
+        int bounded = Math.clamp(limit, 1, MAX_PATHS);
+        String sql = """
+                SELECT * FROM cypher('%s', $$
+                    MATCH p = (a {id: $from})-[*1..%d]->(b {id: $to})
+                    RETURN nodes(p), length(p)
+                    ORDER BY length(p)
+                    LIMIT %d
+                $$, ?::agtype) AS (nodes agtype, length agtype)
+                """.formatted(graph, MAX_DEPTH, bounded);
         return jdbc.query(sql,
-                ps -> ps.setObject(1, paramsJson, Types.OTHER),
+                ps -> ps.setObject(1, params(Map.of("from", from, "to", to)), Types.OTHER),
+                (rs, rowNum) -> new PathDto(
+                        Math.toIntExact(agtype.parseLong(rs.getString("length"))),
+                        agtype.parseVertexList(rs.getString("nodes")).stream().map(this::toVertex).toList()));
+    }
+
+    /**
+     * Hybrid SQL + Cypher: the Cypher walk (the asset itself via {@code *0..}, plus everything
+     * downstream) is a row source in an ordinary SQL statement, joined to the relational
+     * {@code repair_crews}/{@code crew_assignments} tables and grouped per crew. {@code agtype::text}
+     * unwraps an agtype string to plain text ({@code "node-5"} → {@code node-5}) for the join key.
+     * The tables are schema-qualified because the connection's search_path starts with
+     * {@code ag_catalog}. A sensor start node yields no rows, as in {@link #findDependents(String)}.
+     */
+    public List<CrewDto> findResponsibleCrews(String id) {
+        String sql = """
+                SELECT c.crew_id, c.name, c.phone, array_agg(a.asset_id ORDER BY a.asset_id) AS assets
+                FROM cypher('%s', $$
+                    MATCH (n {id: $id})-[*0..%d]->(d)
+                    WHERE label(n) <> 'Sensor' AND label(d) <> 'Sensor'
+                    RETURN DISTINCT d.id
+                $$, ?::agtype) AS g(asset_id agtype)
+                JOIN public.crew_assignments a ON a.asset_id = g.asset_id::text
+                JOIN public.repair_crews c ON c.crew_id = a.crew_id
+                GROUP BY c.crew_id, c.name, c.phone
+                ORDER BY c.crew_id
+                """.formatted(graph, MAX_DEPTH);
+        return jdbc.query(sql,
+                ps -> ps.setObject(1, params(Map.of("id", id)), Types.OTHER),
+                (rs, rowNum) -> new CrewDto(
+                        rs.getString("crew_id"),
+                        rs.getString("name"),
+                        rs.getString("phone"),
+                        List.of((String[]) rs.getArray("assets").getArray())));
+    }
+
+    private List<VertexDto> queryById(String sql, String id) {
+        return jdbc.query(sql,
+                ps -> ps.setObject(1, params(Map.of("id", id)), Types.OTHER),
                 vertexMapper());
+    }
+
+    /** The agtype parameter map bound to {@code ?::agtype}. */
+    private String params(Map<String, Object> params) {
+        return objectMapper.writeValueAsString(params);
+    }
+
+    /** An entity from {@code nodes(p)}: the business id lives in properties, not AGE's graphid. */
+    @SuppressWarnings("unchecked")
+    private VertexDto toVertex(Map<String, Object> entity) {
+        Map<String, Object> props = (Map<String, Object>) entity.getOrDefault("properties", Map.of());
+        return new VertexDto(String.valueOf(props.get("id")), String.valueOf(entity.get("label")), props);
     }
 
     private RowMapper<VertexDto> vertexMapper() {

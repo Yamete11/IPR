@@ -4,6 +4,8 @@ import inno.ipr.topology_service.exception.AgeQueryException;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -16,9 +18,9 @@ import java.util.Map;
  * live in {@code TopologyQueryService}.
  *
  * <p>Only the JSON-compatible subset of agtype is handled (strings, numbers, booleans, objects).
- * The seed graph uses nothing else; extended agtype types (typed numerics, vertices/edges rendered
- * inline) are out of scope for the read API, which selects {@code n.id}/{@code label(n)}/
- * {@code properties(n)} individually.
+ * The seed graph uses nothing else. Entities rendered inline (a {@code nodes(p)} list) carry type
+ * annotations such as {@code ::vertex}; {@link #parseVertexList} strips those before reading the
+ * JSON. Everything else selects {@code n.id}/{@code label(n)}/{@code properties(n)} individually.
  */
 @Component
 public class AgtypeParser {
@@ -67,5 +69,68 @@ public class AgtypeParser {
         } catch (RuntimeException e) {
             throw new AgeQueryException("Failed to parse agtype map: " + raw, e);
         }
+    }
+
+    /** Parses an agtype integer (a {@code count(...)}/{@code sum(...)}/{@code length(p)} result). */
+    public long parseLong(String raw) {
+        String value = raw == null ? null : parseScalar(stripTypeAnnotations(raw));
+        if (value == null || "null".equals(value)) {
+            return 0L;
+        }
+        try {
+            return new BigDecimal(value).longValueExact();
+        } catch (RuntimeException e) {
+            throw new AgeQueryException("Failed to parse agtype integer: " + raw, e);
+        }
+    }
+
+    /**
+     * Parses a list of vertices as AGE renders {@code nodes(p)}:
+     * {@code [{"id": 8444..., "label": "Substation", "properties": {...}}::vertex, ...]}.
+     * Returns one map per vertex with the keys {@code id} (AGE's internal graphid), {@code label}
+     * and {@code properties}.
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> parseVertexList(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(stripTypeAnnotations(raw), List.class);
+        } catch (RuntimeException e) {
+            throw new AgeQueryException("Failed to parse agtype vertex list: " + raw, e);
+        }
+    }
+
+    /**
+     * Removes agtype annotations ({@code ::vertex}, {@code ::edge}, {@code ::path}, {@code ::numeric})
+     * that follow a value, leaving plain JSON. String literals are copied verbatim, so a property value
+     * that happens to contain {@code "::vertex"} is left alone.
+     */
+    static String stripTypeAnnotations(String raw) {
+        StringBuilder out = new StringBuilder(raw.length());
+        boolean inString = false;
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (inString) {
+                out.append(c);
+                if (c == '\\' && i + 1 < raw.length()) {
+                    out.append(raw.charAt(++i));
+                } else if (c == '"') {
+                    inString = false;
+                }
+            } else if (c == '"') {
+                inString = true;
+                out.append(c);
+            } else if (c == ':' && i + 1 < raw.length() && raw.charAt(i + 1) == ':') {
+                i++;
+                while (i + 1 < raw.length() && Character.isLetter(raw.charAt(i + 1))) {
+                    i++;
+                }
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
     }
 }

@@ -1,6 +1,9 @@
 package inno.ipr.topology_service.service;
 
+import inno.ipr.topology_service.graphql.dto.CrewDto;
 import inno.ipr.topology_service.graphql.dto.EdgeDto;
+import inno.ipr.topology_service.graphql.dto.ImpactSummaryDto;
+import inno.ipr.topology_service.graphql.dto.PathDto;
 import inno.ipr.topology_service.graphql.dto.VertexDto;
 import inno.ipr.topology_service.repository.TopologyRepository;
 import org.springframework.stereotype.Service;
@@ -34,5 +37,17 @@ public class TopologyQueryService {
 
     public List<VertexDto> findDependencies(String id) {
         return repository.findDependencies(id);
+    }
+
+    public ImpactSummaryDto impactSummary(String id) {
+        return repository.impactSummary(id);
+    }
+
+    public List<PathDto> findPaths(String from, String to, int limit) {
+        return repository.findPaths(from, to, limit);
+    }
+
+    public List<CrewDto> findResponsibleCrews(String id) {
+        return repository.findResponsibleCrews(id);
     }
 }

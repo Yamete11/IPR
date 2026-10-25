@@ -44,6 +44,7 @@ Kafka: city-telemetry ──► ingestion-service ──► TimescaleDB `metrics
 | `anomaly-detector-service` | Java 25 / Boot 4.1 | 8080 | TimescaleDB `metrics_5m_avg` | Kafka `infrastructure-alerts` |
 | `ai-incident-responder-service` | Java 25 / Boot 4.1 | 8080 | `infrastructure-alerts` | `incidents` table; poison → `infrastructure-alerts.DLQ` |
 | `incident-api-service` | Java 25 / Boot 4.1 | 8081 | — | GraphQL read API over `incidents` + `metrics` |
+| `dashboard` | Angular 21 | 4200 | both GraphQL APIs | — (UI: incidents, topology graph, sensor charts) |
 
 Each Java service is a standalone Gradle (Kotlin DSL) project. Backend services never call each
 other: shared state lives in two PostgreSQL instances, `timescaledb` (metrics, incidents) and
@@ -89,7 +90,17 @@ three incidents, and you can read them back:
 - Incident API GraphiQL: <http://localhost:8081/graphiql> (needs the `dev` profile) — try
   `{ incidents { incidentId criticality impactedObjects remediationSteps } }`.
 - Topology GraphiQL: <http://localhost:8080/graphiql> with `--spring.profiles.active=dev` on
-  `topology-service` — try `{ dependents(id: "node-5") { id label } }`.
+  `topology-service` — try `{ dependents(id: "node-5") { id label } }`,
+  `{ impactSummary(id: "node-5") { totalObjects apartments byLabel { label count } } }`,
+  `{ paths(from: "sub-1", to: "bld-12") { length nodes { id } } }` or
+  `{ responsibleCrews(id: "node-5") { name assets } }` (graph model, Cypher features and the
+  AGE-vs-SQL benchmark: [`docs/graph-vs-sql.md`](docs/graph-vs-sql.md)).
+
+Or open the dashboard (Node 22.12+; `ng serve` proxies `/api/*/graphql` to :8080 / :8081):
+
+```bash
+cd dashboard && npx npm@11 ci && npm start      # http://localhost:4200 (npm 10 can't install it)
+```
 
 Load profile: `sensor_simulator.py --extra-sensors 997 --interval 0.5` emits ~2000 messages per
 second from ~1000 sensors.
@@ -104,7 +115,9 @@ breaker is open the consumer pauses and retries rather than dead-lettering the a
 
 ```bash
 cd <service> && ./gradlew build          # compiles, runs unit + integration tests
+cd topology-service && ./gradlew graphBenchmark   # Cypher vs recursive CTE on ~10k vertices (~3 min, Docker)
 cd sensor-simulator && ./.venv/Scripts/python.exe -m pytest -q
+cd dashboard && npm run build && npx ng test --watch=false
 ```
 
 Integration tests that need a database use Testcontainers and skip themselves when Docker is not
@@ -134,6 +147,7 @@ topology-service/            seed → AGE graph, GraphQL
 anomaly-detector-service/    continuous aggregate → threshold rules → alerts
 ai-incident-responder-service/ alerts → context (TimescaleDB + AGE) → Claude → incidents
 incident-api-service/        GraphQL over incidents + metrics
+dashboard/                   Angular UI over both GraphQL APIs (nginx image for Kubernetes)
 docs/                        microservices contract + Mermaid diagrams
 ```
 

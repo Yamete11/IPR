@@ -24,4 +24,37 @@ type Query {
   # Dependency traversals: what loses service if `id` fails / what `id` relies on.
   dependents(id: ID!): [Vertex!]!
   dependencies(id: ID!): [Vertex!]!
+
+  # Cypher aggregation over `dependents`: objects per label and apartments without service.
+  impactSummary(id: ID!): ImpactSummary!
+
+  # Directed paths from `from` to `to`, shortest first (at most `limit`, capped at 20).
+  paths(from: ID!, to: ID!, limit: Int = 5): [Path!]!
+
+  # Hybrid SQL + Cypher: repair crews assigned to `id` or anything downstream of it.
+  responsibleCrews(id: ID!): [Crew!]!
+}
+
+type LabelCount {
+  label: String!
+  count: Int!
+}
+
+type ImpactSummary {
+  sourceId: ID!
+  totalObjects: Int!
+  apartments: Int!
+  byLabel: [LabelCount!]!
+}
+
+type Path {
+  length: Int!
+  nodes: [Vertex!]!
+}
+
+type Crew {
+  crewId: ID!
+  name: String!
+  phone: String
+  assets: [String!]!
 }

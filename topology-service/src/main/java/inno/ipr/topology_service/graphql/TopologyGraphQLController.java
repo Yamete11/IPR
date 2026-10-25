@@ -1,6 +1,9 @@
 package inno.ipr.topology_service.graphql;
 
+import inno.ipr.topology_service.graphql.dto.CrewDto;
 import inno.ipr.topology_service.graphql.dto.EdgeDto;
+import inno.ipr.topology_service.graphql.dto.ImpactSummaryDto;
+import inno.ipr.topology_service.graphql.dto.PathDto;
 import inno.ipr.topology_service.graphql.dto.VertexDto;
 import inno.ipr.topology_service.service.TopologyQueryService;
 import org.springframework.graphql.data.method.annotation.Argument;
@@ -40,5 +43,20 @@ public class TopologyGraphQLController {
     @QueryMapping
     public List<VertexDto> dependencies(@Argument String id) {
         return queryService.findDependencies(id);
+    }
+
+    @QueryMapping
+    public ImpactSummaryDto impactSummary(@Argument String id) {
+        return queryService.impactSummary(id);
+    }
+
+    @QueryMapping
+    public List<PathDto> paths(@Argument String from, @Argument String to, @Argument int limit) {
+        return queryService.findPaths(from, to, limit);
+    }
+
+    @QueryMapping
+    public List<CrewDto> responsibleCrews(@Argument String id) {
+        return queryService.findResponsibleCrews(id);
     }
 }

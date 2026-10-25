@@ -32,7 +32,7 @@ Diagram sources: [`architecture.mmd`](architecture.mmd) (component flowchart) an
   - `*.DLQ` — dead-letter topics for poison messages (per Idempotent Consumer / DLQ patterns).
 - **PostgreSQL** (two instances, one extension each):
   - `timescaledb` (TimescaleDB): `metrics` hypertable, `metrics_5m_avg` continuous aggregate, `incidents` table.
-  - `age-db` (Apache AGE): `city_topology` graph — vertices `Substation`, `DistributionNode`, `ResidentialBuilding`, `Sensor`; edges `PowerLine`, `Pipeline`, `SensorLink`. Written **only** by `topology-service` (seeded from `topology-service/src/main/resources/seed/city-topology.json`).
+  - `age-db` (Apache AGE): `city_topology` graph — vertices `Substation`, `DistributionNode`, `ResidentialBuilding`, `Sensor`; edges `PowerLine`, `Pipeline`, `SensorLink`. Written **only** by `topology-service` (seeded from `topology-service/src/main/resources/seed/city-topology.json`). Next to the graph, `topology-service` also owns two relational tables, `repair_crews` and `crew_assignments` (asset id → crew), joined against Cypher results in the `responsibleCrews` query. GraphQL read API: `vertices`, `edges`, `dependents`, `dependencies`, `impactSummary` (Cypher aggregation), `paths` (path finding), `responsibleCrews` (hybrid SQL + Cypher). Model, queries and the AGE-vs-SQL benchmark: [`graph-vs-sql.md`](graph-vs-sql.md).
 
 ## Message & data contracts
 
