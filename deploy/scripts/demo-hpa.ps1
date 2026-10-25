@@ -14,7 +14,9 @@ param(
     [int]$Watch = 180,
     [switch]$Stop
 )
-$ErrorActionPreference = "Stop"
+# Native commands (docker, kind, kubectl) write progress to stderr, which Windows PowerShell 5.1 turns
+# into terminating errors under "Stop" once output is redirected; failures are caught via $LASTEXITCODE.
+$ErrorActionPreference = "Continue"
 
 if ($Stop) {
     kubectl scale deployment/sensor-simulator --namespace $Namespace --replicas=0

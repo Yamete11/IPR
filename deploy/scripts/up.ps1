@@ -23,7 +23,12 @@ function Step([string]$Label, [scriptblock]$Body) {
     Write-Host ""
     Write-Host "==> $Label" -ForegroundColor Cyan
     $global:LASTEXITCODE = 0
-    & $Body
+    # kind, helm, docker and kubectl write progress to stderr. Under "Stop", Windows PowerShell 5.1
+    # turns that into a terminating NativeCommandError as soon as output is redirected (CI, Tee-Object),
+    # so native commands run under "Continue" and success is judged by their exit code.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $Body } finally { $ErrorActionPreference = $previous }
     if ($LASTEXITCODE -ne 0) { throw "Step failed: $Label (exit $LASTEXITCODE)" }
 }
 

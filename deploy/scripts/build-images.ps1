@@ -11,7 +11,9 @@ param(
         "ai-incident-responder-service", "incident-api-service", "sensor-simulator", "dashboard")
 )
 
-$ErrorActionPreference = "Stop"
+# Native commands (docker, kind, kubectl) write progress to stderr, which Windows PowerShell 5.1 turns
+# into terminating errors under "Stop" once output is redirected; failures are caught via $LASTEXITCODE.
+$ErrorActionPreference = "Continue"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 # BuildKit is needed for the Gradle cache mounts in the Dockerfiles (Docker Desktop's default).
 $env:DOCKER_BUILDKIT = "1"

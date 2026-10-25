@@ -38,6 +38,10 @@ spec:
         - name: postgres
           # The image sets shared_preload_libraries=timescaledb and creates the extension on first boot.
           image: {{ .Values.timescaledb.image }}
+          # timescaledb-tune sizes max_connections from the memory limit on first boot (25 at 2Gi), too
+          # few once ingestion-service scales out (pool of 10 per replica, up to 6 replicas under KEDA).
+          # Command-line settings override the tuned postgresql.conf, also on an existing volume.
+          args: ["postgres", "-c", "max_connections={{ .Values.timescaledb.maxConnections }}"]
           env:
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata

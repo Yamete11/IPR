@@ -38,6 +38,8 @@ ageDb:
 timescaledb:
   image: timescale/timescaledb:2.28.3-pg16
   storage: 10Gi
+  # ingestion 6 x 10 + incident-api 10 + responder 5 + detector 5 + init-container probes, with headroom.
+  maxConnections: 150
   resources:
     requests:
       cpu: 250m
