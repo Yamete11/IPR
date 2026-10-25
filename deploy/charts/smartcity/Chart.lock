@@ -20,5 +20,8 @@ dependencies:
 - name: sensor-simulator
   repository: file://../sensor-simulator
   version: 0.1.0
-digest: sha256:6a941712c292de6d9e25bb9749fd9043002231cf9ed1a71da4d4677a50fccd7c
-generated: "2026-09-06T17:55:05.8004467+02:00"
+- name: dashboard
+  repository: file://../dashboard
+  version: 0.1.0
+digest: sha256:3d115f02442e83ea41018801e4b5e5085dfe6d5617ec4f81238f5f7015783b89
+generated: "2026-10-25T16:09:07.046868+01:00"

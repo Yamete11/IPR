@@ -1,0 +1,6 @@
+apiVersion: v2
+name: dashboard
+description: Angular dashboard (incidents, topology graph, sensor charts) served by nginx, proxying both GraphQL APIs
+type: application
+version: 0.1.0
+appVersion: "0.0.1-SNAPSHOT"

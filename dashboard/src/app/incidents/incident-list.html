@@ -1,0 +1,60 @@
+<div class="header">
+  <h1>Incidents</h1>
+  <mat-slide-toggle [checked]="autoRefresh()" (change)="autoRefresh.set($event.checked)">
+    Auto-refresh (10 s)
+  </mat-slide-toggle>
+</div>
+
+<div class="stats">
+  <mat-card appearance="outlined"><mat-card-content>
+    <div class="stat">{{ counts().total }}</div><div class="caption">incidents</div>
+  </mat-card-content></mat-card>
+  <mat-card appearance="outlined"><mat-card-content>
+    <div class="stat high">{{ counts().high }}</div><div class="caption">high criticality</div>
+  </mat-card-content></mat-card>
+  <mat-card appearance="outlined"><mat-card-content>
+    <div class="stat">{{ counts().sensors }}</div><div class="caption">sensors affected</div>
+  </mat-card-content></mat-card>
+</div>
+
+@if (error()) {
+  <div class="error">incident-api unavailable: {{ error() }}</div>
+}
+
+@if (loaded() && incidents().length === 0 && !error()) {
+  <p class="empty">No incidents yet. Run the sensor simulator with <code>--anomaly-prob 0.4</code>.</p>
+}
+
+@if (incidents().length > 0) {
+  <table mat-table [dataSource]="incidents()" class="mat-elevation-z1">
+    <ng-container matColumnDef="createdAt">
+      <th mat-header-cell *matHeaderCellDef>Created</th>
+      <td mat-cell *matCellDef="let i">{{ i.createdAt | date: 'yyyy-MM-dd HH:mm:ss' }}</td>
+    </ng-container>
+    <ng-container matColumnDef="criticality">
+      <th mat-header-cell *matHeaderCellDef>Criticality</th>
+      <td mat-cell *matCellDef="let i"><app-criticality-chip [value]="i.criticality" /></td>
+    </ng-container>
+    <ng-container matColumnDef="sensorId">
+      <th mat-header-cell *matHeaderCellDef>Sensor</th>
+      <td mat-cell *matCellDef="let i">
+        <a [routerLink]="['/sensors', i.sensorId]" (click)="$event.stopPropagation()">{{ i.sensorId }}</a>
+      </td>
+    </ng-container>
+    <ng-container matColumnDef="metricType">
+      <th mat-header-cell *matHeaderCellDef>Metric</th>
+      <td mat-cell *matCellDef="let i">{{ i.metricType ?? '—' }}</td>
+    </ng-container>
+    <ng-container matColumnDef="summary">
+      <th mat-header-cell *matHeaderCellDef>Summary</th>
+      <td mat-cell *matCellDef="let i" class="summary">{{ i.summary ?? '—' }}</td>
+    </ng-container>
+    <ng-container matColumnDef="impacted">
+      <th mat-header-cell *matHeaderCellDef>Impacted</th>
+      <td mat-cell *matCellDef="let i">{{ i.impactedObjects.length }}</td>
+    </ng-container>
+
+    <tr mat-header-row *matHeaderRowDef="columns"></tr>
+    <tr mat-row *matRowDef="let row; columns: columns" class="row" (click)="open(row.incidentId)"></tr>
+  </table>
+}

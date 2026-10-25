@@ -1,0 +1,6 @@
+# Keep the image build context to what the Dockerfile copies.
+node_modules/
+dist/
+.angular/
+.vscode/
+src/**/*.spec.ts

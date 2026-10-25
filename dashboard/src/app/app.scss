@@ -1,0 +1,22 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.toolbar {
+  gap: 12px;
+  background: var(--mat-sys-primary);
+  color: var(--mat-sys-on-primary);
+}
+
+.brand { font-weight: 500; }
+
+.container { flex: 1; }
+
+.sidenav { width: 200px; }
+
+.content {
+  padding: 16px 24px 32px;
+  box-sizing: border-box;
+}

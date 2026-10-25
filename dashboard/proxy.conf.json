@@ -1,0 +1,12 @@
+{
+  "/api/incidents/graphql": {
+    "target": "http://localhost:8081",
+    "pathRewrite": { "^/api/incidents/graphql": "/graphql" },
+    "changeOrigin": true
+  },
+  "/api/topology/graphql": {
+    "target": "http://localhost:8080",
+    "pathRewrite": { "^/api/topology/graphql": "/graphql" },
+    "changeOrigin": true
+  }
+}

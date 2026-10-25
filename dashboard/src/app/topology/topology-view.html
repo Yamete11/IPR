@@ -1,0 +1,107 @@
+<h1>Network topology</h1>
+
+@if (topology.error()) {
+  <div class="error">topology-service unavailable: {{ topology.error()?.message }}</div>
+}
+
+<div class="layout">
+  <mat-card appearance="outlined" class="graph-card">
+    <div #graph class="graph"></div>
+    <div class="legend">
+      @for (l of legend; track l.label) {
+        <span class="item"><span class="swatch" [style.background]="l.color"></span>{{ l.label }}</span>
+      }
+      @for (e of edgeLegend; track e.type) {
+        <span class="item"><span class="line" [style.background]="e.color"></span>{{ e.type }}</span>
+      }
+      <span class="item"><span class="swatch ring"></span>has incidents</span>
+    </div>
+  </mat-card>
+
+  <mat-card appearance="outlined" class="panel">
+    @if (selected(); as v) {
+      <mat-card-header>
+        <mat-card-title>{{ displayName(v) }}</mat-card-title>
+        <mat-card-subtitle>{{ v.label }} · <code>{{ v.id }}</code></mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        @if (v.properties) {
+          <pre class="props">{{ v.properties | json }}</pre>
+        }
+
+        @if (impact.value(); as imp) {
+          @if (imp.summary.totalObjects > 0) {
+            <div class="impact">
+              <div class="impact-head">If this fails</div>
+              <div>
+                <strong>{{ imp.summary.totalObjects }}</strong> objects lose service
+                @if (imp.summary.apartments > 0) {
+                  · <strong>{{ imp.summary.apartments }}</strong> apartments
+                }
+              </div>
+              <div class="by-label">
+                @for (l of imp.summary.byLabel; track l.label) {
+                  <span>{{ l.label }}: {{ l.count }}</span>
+                }
+              </div>
+            </div>
+          }
+          @if (imp.crews.length) {
+            <h3>Crews to dispatch</h3>
+            @for (c of imp.crews; track c.crewId) {
+              <div class="crew">
+                <strong>{{ c.name }}</strong>
+                @if (c.phone) {
+                  <span class="phone">{{ c.phone }}</span>
+                }
+                <div class="crew-assets">{{ c.assets.join(', ') }}</div>
+              </div>
+            }
+          }
+        }
+
+        @if (relations.isLoading()) {
+          <p>Loading dependencies…</p>
+        } @else if (relations.error()) {
+          <div class="error">{{ relations.error()?.message }}</div>
+        } @else if (relations.value(); as rel) {
+          <h3 class="dependents-title">Loses service if this fails ({{ rel.dependents.length }})</h3>
+          <mat-list dense>
+            @for (d of rel.dependents; track d.id) {
+              <mat-list-item (click)="select(d.id)" class="link">
+                <span matListItemTitle>{{ displayName(d) }}</span>
+                <span matListItemLine>{{ d.label }} · {{ d.id }}</span>
+              </mat-list-item>
+            } @empty {
+              <p class="empty">Nothing depends on it.</p>
+            }
+          </mat-list>
+          <h3 class="dependencies-title">Relies on ({{ rel.dependencies.length }})</h3>
+          <mat-list dense>
+            @for (d of rel.dependencies; track d.id) {
+              <mat-list-item (click)="select(d.id)" class="link">
+                <span matListItemTitle>{{ displayName(d) }}</span>
+                <span matListItemLine>{{ d.label }} · {{ d.id }}</span>
+              </mat-list-item>
+            } @empty {
+              <p class="empty">No upstream dependencies.</p>
+            }
+          </mat-list>
+        }
+      </mat-card-content>
+      <mat-card-actions>
+        @if (v.label === 'Sensor') {
+          <a mat-button [routerLink]="['/sensors', v.id]"><mat-icon>show_chart</mat-icon> Readings</a>
+        }
+        <button mat-button (click)="clear()">Clear</button>
+      </mat-card-actions>
+    } @else {
+      <mat-card-content>
+        <p class="empty">Click a node to see what depends on it.</p>
+        @if (topology.value(); as t) {
+          <p>{{ t.vertices.length }} vertices · {{ t.edges.length }} edges</p>
+        }
+      </mat-card-content>
+    }
+  </mat-card>
+</div>

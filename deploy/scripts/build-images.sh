@@ -13,7 +13,7 @@ export DOCKER_BUILDKIT=1
 SERVICES=("$@")
 if [ ${#SERVICES[@]} -eq 0 ]; then
   SERVICES=(topology-service ingestion-service anomaly-detector-service
-            ai-incident-responder-service incident-api-service sensor-simulator)
+            ai-incident-responder-service incident-api-service sensor-simulator dashboard)
 fi
 
 for svc in "${SERVICES[@]}"; do

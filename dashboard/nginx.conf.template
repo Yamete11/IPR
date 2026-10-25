@@ -1,0 +1,38 @@
+# Rendered to /etc/nginx/conf.d/default.conf by the nginx image's envsubst entrypoint; only defined
+# env vars (TOPOLOGY_UPSTREAM, INCIDENT_API_UPSTREAM) are substituted, nginx's own $vars are left alone.
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+
+    # Same paths as proxy.conf.json in dev.
+    location = /api/topology/graphql {
+        proxy_pass ${TOPOLOGY_UPSTREAM}/graphql;
+        proxy_set_header Host $host;
+    }
+
+    location = /api/incidents/graphql {
+        proxy_pass ${INCIDENT_API_UPSTREAM}/graphql;
+        proxy_set_header Host $host;
+    }
+
+    # Liveness/readiness for the chart's probes.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Hashed bundles can be cached forever; index.html must not be.
+    location ~* \.(js|css|woff2?|ico|png|svg)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # SPA fallback: deep links like /incidents/<id> are routed client-side.
+    location / {
+        add_header Cache-Control "no-cache";
+        try_files $uri $uri/ /index.html;
+    }
+}

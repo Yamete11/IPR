@@ -1,0 +1,28 @@
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.stat {
+  font-size: 32px;
+  font-weight: 600;
+  &.high { color: #c62828; }
+}
+
+.caption { color: var(--mat-sys-on-surface-variant); }
+
+table { width: 100%; }
+
+.row { cursor: pointer; }
+.row:hover { background: var(--mat-sys-surface-container-high); }
+
+.summary { max-width: 480px; }

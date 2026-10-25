@@ -1,0 +1,67 @@
+<h1>Sensor readings</h1>
+
+<div class="pickers">
+  <mat-form-field appearance="outline">
+    <mat-label>Graph sensor</mat-label>
+    <mat-select [value]="id()" (selectionChange)="choose($event.value)">
+      @for (s of sensors(); track s.id) {
+        <mat-option [value]="s.id">{{ s.id }} · {{ s.properties?.['metric_type'] }}</mat-option>
+      }
+    </mat-select>
+  </mat-form-field>
+  <mat-form-field appearance="outline">
+    <mat-label>Any sensor id</mat-label>
+    <input matInput #custom placeholder="s-01000" (keyup.enter)="choose(custom.value)" />
+  </mat-form-field>
+  <button mat-stroked-button (click)="choose(custom.value)">Show</button>
+</div>
+
+@if (!id()) {
+  <p class="empty">Pick a sensor to see its last 200 readings (refreshed every 10 s).</p>
+} @else {
+  @if (error()) {
+    <div class="error">incident-api unavailable: {{ error() }}</div>
+  }
+
+  @if (latest(); as last) {
+    <div class="stats">
+      <mat-card appearance="outlined"><mat-card-content>
+        <div class="stat">{{ last.value | number: '1.0-2' }}</div>
+        <div class="caption">latest {{ last.metricType }} · {{ last.timestamp | date: 'HH:mm:ss' }}</div>
+      </mat-card-content></mat-card>
+      <mat-card appearance="outlined"><mat-card-content>
+        <div class="stat">{{ last.status }}</div><div class="caption">status reported by the sensor</div>
+      </mat-card-content></mat-card>
+      <mat-card appearance="outlined"><mat-card-content>
+        <div class="stat small">{{ rule() ? ruleLabel(rule()!) : '—' }}</div>
+        <div class="caption">detector rule (5-min window)</div>
+      </mat-card-content></mat-card>
+    </div>
+  }
+
+  <mat-card appearance="outlined" class="block">
+    <mat-card-header><mat-card-title>{{ id() }}</mat-card-title></mat-card-header>
+    <mat-card-content>
+      @if (metrics().length) {
+        <app-metric-chart [metrics]="metrics()" />
+      } @else if (!error()) {
+        <p class="empty">No readings for {{ id() }} yet.</p>
+      }
+    </mat-card-content>
+  </mat-card>
+
+  <mat-card appearance="outlined" class="block">
+    <mat-card-header><mat-card-title>Incidents for this sensor</mat-card-title></mat-card-header>
+    <mat-card-content>
+      @for (i of incidents.value() ?? []; track i.incidentId) {
+        <a class="incident" [routerLink]="['/incidents', i.incidentId]">
+          <app-criticality-chip [value]="i.criticality" />
+          <span>{{ i.createdAt | date: 'yyyy-MM-dd HH:mm:ss' }}</span>
+          <span class="summary">{{ i.summary }}</span>
+        </a>
+      } @empty {
+        <p class="empty">None.</p>
+      }
+    </mat-card-content>
+  </mat-card>
+}

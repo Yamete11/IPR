@@ -15,9 +15,10 @@ deploy/
   charts/<service>/              one chart per service (Deployment, Service, probes, init waits);
                                  ingestion-service also has the KEDA ScaledObject
   charts/sensor-simulator/       load generator, 0 replicas until you scale it
+  charts/dashboard/              Angular UI on nginx, proxying both GraphQL services
   charts/smartcity/              umbrella chart depending on all of the above
   scripts/up.{ps1,sh}            the whole bring-up, idempotent
-  scripts/build-images.{ps1,sh}  docker build + kind load for the six images
+  scripts/build-images.{ps1,sh}  docker build + kind load for the six images + dashboard
   scripts/demo-hpa.{ps1,sh}      start load, watch KEDA scale ingestion-service 1 -> 6
   scripts/down.{ps1,sh}          delete the cluster
 ```
@@ -74,6 +75,7 @@ ingestion-service-...                            1/1     Running
 anomaly-detector-service-...                     1/1     Running
 ai-incident-responder-service-...                1/1     Running
 incident-api-service-...                         1/1     Running
+dashboard-...                                    1/1     Running
 ```
 
 `sensor-simulator` exists as a Deployment with 0 replicas.
@@ -94,7 +96,14 @@ Nothing is installed in sequence; the charts encode the dependencies instead:
 
 ## Using it
 
-Port-forward the two GraphQL services:
+The dashboard (nginx proxies `/api/topology/graphql` and `/api/incidents/graphql` to the two
+services in-cluster, so only one port-forward is needed):
+
+```
+kubectl -n smartcity port-forward svc/dashboard 8088:80     # http://localhost:8088
+```
+
+Or port-forward the two GraphQL services directly:
 
 ```
 kubectl -n smartcity port-forward svc/topology-service 8080:8080

@@ -1,0 +1,73 @@
+<a mat-button routerLink="/incidents"><mat-icon>arrow_back</mat-icon> All incidents</a>
+
+@if (incident.error()) {
+  <div class="error">Failed to load incident: {{ incident.error()?.message }}</div>
+} @else if (incident.isLoading()) {
+  <p>Loading…</p>
+} @else if (incident.value(); as i) {
+  <div class="title">
+    <h1>{{ i.sensorId }} · {{ i.metricType ?? 'unknown metric' }}</h1>
+    <app-criticality-chip [value]="i.criticality" />
+  </div>
+  <p class="meta">
+    {{ i.createdAt | date: 'yyyy-MM-dd HH:mm:ss' }} · incident <code>{{ i.incidentId }}</code> ·
+    alert <code>{{ i.alertId }}</code> · model <code>{{ i.model ?? '—' }}</code>
+  </p>
+
+  @if (i.summary) {
+    <mat-card appearance="outlined" class="block">
+      <mat-card-content class="summary">{{ i.summary }}</mat-card-content>
+    </mat-card>
+  }
+
+  <div class="grid">
+    <mat-card appearance="outlined">
+      <mat-card-header><mat-card-title>Remediation steps</mat-card-title></mat-card-header>
+      <mat-card-content>
+        <ol class="steps">
+          @for (step of i.remediationSteps; track $index) {
+            <li>{{ step }}</li>
+          }
+        </ol>
+      </mat-card-content>
+    </mat-card>
+
+    <mat-card appearance="outlined">
+      <mat-card-header>
+        <mat-card-title>Impacted objects ({{ i.impactedObjects.length }})</mat-card-title>
+      </mat-card-header>
+      <mat-card-content>
+        <mat-chip-set>
+          @for (obj of i.impactedObjects; track obj) {
+            <mat-chip>{{ obj }}</mat-chip>
+          }
+        </mat-chip-set>
+      </mat-card-content>
+      <mat-card-actions>
+        <a mat-button [routerLink]="['/topology']" [queryParams]="{ focus: i.sensorId }">
+          <mat-icon>hub</mat-icon> Show in topology
+        </a>
+      </mat-card-actions>
+    </mat-card>
+  </div>
+
+  <mat-card appearance="outlined" class="block">
+    <mat-card-header>
+      <mat-card-title>Recent readings of {{ i.sensorId }}</mat-card-title>
+    </mat-card-header>
+    <mat-card-content>
+      @if (metrics.value(); as m) {
+        @if (m.length) {
+          <app-metric-chart [metrics]="m" />
+        } @else {
+          <p class="empty">No readings stored for this sensor.</p>
+        }
+      }
+    </mat-card-content>
+    <mat-card-actions>
+      <a mat-button [routerLink]="['/sensors', i.sensorId]"><mat-icon>show_chart</mat-icon> Live chart</a>
+    </mat-card-actions>
+  </mat-card>
+} @else {
+  <p class="empty">Incident {{ id() }} not found.</p>
+}

@@ -1,0 +1,20 @@
+.title {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  h1 { margin: 8px 0; }
+}
+
+.meta { color: var(--mat-sys-on-surface-variant); }
+
+.block { margin: 16px 0; }
+
+.summary { font-size: 16px; padding-top: 16px; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.steps li { margin: 6px 0; line-height: 1.45; }

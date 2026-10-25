@@ -1,0 +1,26 @@
+# Image built by deploy/scripts/build-images.* and loaded into the Kind cluster.
+image:
+  repository: smartcity/dashboard
+  tag: dev
+  pullPolicy: IfNotPresent
+# The umbrella chart sets global.imageTag once for every service; leave empty when standalone.
+global:
+  imageTag: ""
+
+replicaCount: 1
+# nginx-unprivileged listens on 8080 as UID 101.
+containerPort: 8080
+service:
+  port: 80
+
+# GraphQL backends nginx proxies /api/topology/graphql and /api/incidents/graphql to (in-cluster DNS).
+upstreams:
+  topology: http://topology-service:8080
+  incidentApi: http://incident-api-service:8081
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    memory: 128Mi

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds the six service images with Docker and loads them into the Kind cluster (no registry).
+  Builds the six service images plus the dashboard with Docker and loads them into the Kind cluster (no registry).
 #>
 [CmdletBinding()]
 param(
@@ -8,7 +8,7 @@ param(
     [string]$Tag = "dev",
     [string[]]$Services = @(
         "topology-service", "ingestion-service", "anomaly-detector-service",
-        "ai-incident-responder-service", "incident-api-service", "sensor-simulator")
+        "ai-incident-responder-service", "incident-api-service", "sensor-simulator", "dashboard")
 )
 
 $ErrorActionPreference = "Stop"
