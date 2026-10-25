@@ -46,7 +46,7 @@ $PgPassword  = Setting "POSTGRES_PASSWORD" "smartcity"
 $PgDb        = Setting "POSTGRES_DB" "smartcity"
 $ApiKey      = Setting "ANTHROPIC_API_KEY" ""
 $ClaudeMock  = Setting "AI_CLAUDE_MOCK" "true"
-$ClaudeModel = Setting "AI_CLAUDE_MODEL" "claude-opus-5"
+$ClaudeModel = Setting "AI_CLAUDE_MODEL" "claude-opus-5-5"
 if ($ClaudeMock -eq "false" -and -not $ApiKey) {
     throw "AI_CLAUDE_MOCK=false but ANTHROPIC_API_KEY is empty (set it in .env or the environment)"
 }

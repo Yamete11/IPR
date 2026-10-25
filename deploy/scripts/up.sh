@@ -22,7 +22,7 @@ PG_PASSWORD="${POSTGRES_PASSWORD:-smartcity}"
 PG_DB="${POSTGRES_DB:-smartcity}"
 API_KEY="${ANTHROPIC_API_KEY:-}"
 CLAUDE_MOCK="${AI_CLAUDE_MOCK:-true}"
-CLAUDE_MODEL="${AI_CLAUDE_MODEL:-claude-opus-5}"
+CLAUDE_MODEL="${AI_CLAUDE_MODEL:-claude-opus-5-5}"
 if [ "$CLAUDE_MOCK" = "false" ] && [ -z "$API_KEY" ]; then
   echo "AI_CLAUDE_MOCK=false but ANTHROPIC_API_KEY is empty (set it in .env or the environment)" >&2
   exit 1

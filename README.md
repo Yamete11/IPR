@@ -108,7 +108,7 @@ second from ~1000 sensors.
 ## Real Claude calls
 
 Set `ANTHROPIC_API_KEY` and run the responder with `AI_CLAUDE_MOCK=false`. The model defaults to
-`claude-opus-5` (`AI_CLAUDE_MODEL`). Calls are billed and guarded by a circuit breaker; while the
+`claude-opus-5-5` (`AI_CLAUDE_MODEL`). Calls are billed and guarded by a circuit breaker; while the
 breaker is open the consumer pauses and retries rather than dead-lettering the alert.
 
 ## Building and testing

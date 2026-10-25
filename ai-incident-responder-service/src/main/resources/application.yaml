@@ -46,8 +46,10 @@ spring:
 # no billed request) so the pipeline can be exercised end-to-end locally.
 ai:
   claude:
-    model: ${AI_CLAUDE_MODEL:claude-opus-5}
+    model: ${AI_CLAUDE_MODEL:claude-opus-5-5}
     mock: ${AI_CLAUDE_MOCK:false}
+    # Explicit because Claude Opus 5.5 defaults to medium (Opus 5 defaulted to high).
+    effort: ${AI_CLAUDE_EFFORT:high}
 
 server:
   port: ${SERVER_PORT:8080}

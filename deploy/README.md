@@ -144,7 +144,7 @@ Prometheus-format metrics are on every service at `/actuator/prometheus` (pods c
 
 Put `ANTHROPIC_API_KEY=...` and `AI_CLAUDE_MOCK=false` in `.env` and re-run `up` with
 `-SkipImages`. The infra chart then creates the `anthropic` Secret and sets the mock flag in the
-ConfigMap; the responder pod restarts and calls `claude-opus-5` (`AI_CLAUDE_MODEL`). Calls are
+ConfigMap; the responder pod restarts and calls `claude-opus-5-5` (`AI_CLAUDE_MODEL`). Calls are
 billed. While the circuit breaker is open the consumer pauses and retries rather than
 dead-lettering the alert.
 

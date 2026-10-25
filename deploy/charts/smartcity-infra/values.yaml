@@ -12,7 +12,7 @@ config:
   POSTGRES_DB: smartcity
   # Offline planner by default; flip to "false" (and provide anthropic.apiKey) for real Claude calls.
   AI_CLAUDE_MOCK: "true"
-  AI_CLAUDE_MODEL: claude-opus-5
+  AI_CLAUDE_MODEL: claude-opus-5-5
   # A cold cluster can take a while before ingestion-service has created the hypertable.
   ANOMALY_SCHEMA_WAIT_TIMEOUT: 15m
 

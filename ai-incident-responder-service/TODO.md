@@ -33,7 +33,7 @@ their Kafka/JDBC/AGE scaffolding. Turns the stock Boot skeleton into a working w
 - **Idempotent consumer** — before any Claude call, `SELECT 1 FROM incidents WHERE alert_id=?`; skip
   if present. Insert `ON CONFLICT (alert_id) DO NOTHING`. Survives restarts (no in-memory set).
 - **Claude via the official Anthropic Java SDK** (`com.anthropic:anthropic-java`). Default model
-  `claude-opus-5` (property `ai.claude.model`), adaptive thinking, and the SDK's **structured
+  `claude-opus-5-5` (property `ai.claude.model`), adaptive thinking, and the SDK's **structured
   output** (`.outputConfig(IncidentPlan.class)`) so the plan is typed + schema-validated.
   `AnthropicClient` from `AnthropicOkHttpClient.fromEnv()` (reads `ANTHROPIC_API_KEY`).
 - **Circuit breaker = Resilience4j core** (`io.github.resilience4j:resilience4j-circuitbreaker`),
