@@ -1,0 +1,4 @@
+# Local secrets (ANTHROPIC_API_KEY, Postgres credentials) — copy .env.example and keep it out of git.
+.env
+.env.*
+!.env.example
