@@ -7,7 +7,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.json.JsonTest;
 import org.springframework.context.annotation.Import;
+import tools.jackson.core.JacksonException;
 
+import java.time.Duration;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -23,6 +25,20 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
  * producer's misspelled {@code value} field into a missing one. A locally constructed mapper would
  * reject that payload as malformed instead and the test would assert a behaviour production does not
  * have.
+ *
+ * <ul>
+ *   <li>{@code Valid.acceptsAGenuineZeroReading}: the point of the missing-value checks is that a
+ *       fabricated 0.0 must not reach the hypertable — not that zero is invalid. A sensor genuinely
+ *       reading zero (a dead line, a drained pipe) is exactly the reading the anomaly detector
+ *       needs to see.</li>
+ *   <li>{@code ValueValidation.rejectsAMisspelledValueField}: a producer-side typo is the realistic
+ *       form of this bug — the payload is well-formed, every other field is right, and Boot's
+ *       mapper drops the unknown property silently.</li>
+ *   <li>{@code Malformed.rejectsAJsonNullLiteral}: the literal {@code null} binds to no message; it
+ *       must still be classified as bad data, or it would be retried forever.</li>
+ *   <li>{@code Malformed.keepsJacksonsErrorAsTheCause}: the exception message is a fixed label, so
+ *       the line and column of the syntax error survive only in the cause.</li>
+ * </ul>
  */
 @JsonTest
 @Import(TelemetryParser.class)
@@ -55,11 +71,6 @@ class TelemetryParserTest {
             assertThat(m.status()).isEqualTo("OK");
         }
 
-        /**
-         * The point of the missing-value checks is that a fabricated 0.0 must not reach the
-         * hypertable — not that zero is invalid. A sensor genuinely reading zero (a dead line, a
-         * drained pipe) is exactly the reading the anomaly detector needs to see.
-         */
         @Test
         void acceptsAGenuineZeroReading() {
             TelemetryMessage m = parser.parse(json("""
@@ -116,10 +127,6 @@ class TelemetryParserTest {
                     .withMessage("Missing 'value'");
         }
 
-        /**
-         * A producer-side typo is the realistic form of this bug: the payload is well-formed, every
-         * other field is right, and Boot's mapper drops the unknown property silently.
-         */
         @Test
         void rejectsAMisspelledValueField() {
             assertThatExceptionOfType(InvalidTelemetryException.class)
@@ -160,6 +167,24 @@ class TelemetryParserTest {
                             "sensor_id":"s-1","metric_type":"pipe_pressure","value":1.0,"status":"OK"
                             """)))
                     .withMessage("Missing 'timestamp'");
+        }
+
+        @Test
+        void rejectsATimestampFarInTheFuture() {
+            assertThatExceptionOfType(InvalidTelemetryException.class)
+                    .isThrownBy(() -> parser.parse(json("""
+                            "timestamp":"%s","sensor_id":"s-1","metric_type":"pipe_pressure",
+                            "value":1.0,"status":"OK"
+                            """.formatted(Instant.now().plus(Duration.ofHours(1))))))
+                    .withMessageStartingWith("'timestamp' is in the future");
+        }
+
+        @Test
+        void toleratesSmallClockSkew() {
+            assertThatCode(() -> parser.parse(json("""
+                    "timestamp":"%s","sensor_id":"s-1","metric_type":"pipe_pressure",
+                    "value":1.0,"status":"OK"
+                    """.formatted(Instant.now().plusSeconds(30))))).doesNotThrowAnyException();
         }
 
         @Test
@@ -233,42 +258,31 @@ class TelemetryParserTest {
         }
 
         @Test
+        void rejectsAKafkaTombstone() {
+            assertThatExceptionOfType(InvalidTelemetryException.class)
+                    .isThrownBy(() -> parser.parse(null))
+                    .withMessage("Null payload (tombstone)");
+        }
+
+        @Test
+        void rejectsAJsonNullLiteral() {
+            assertThatExceptionOfType(InvalidTelemetryException.class)
+                    .isThrownBy(() -> parser.parse("null"))
+                    .withMessage("Empty telemetry payload");
+        }
+
+        @Test
         void rejectsAJsonArray() {
             assertThatExceptionOfType(InvalidTelemetryException.class)
                     .isThrownBy(() -> parser.parse("[]"))
                     .withMessage("Malformed telemetry JSON");
         }
-    }
-
-    /**
-     * The DLQ recoverer in {@code KafkaConfig} logs the payload it pulls back off the exception, so
-     * an empty or lossy payload would leave operators debugging a dead-lettered record blind.
-     */
-    @Nested
-    @DisplayName("payload retained for dead-letter logging")
-    class PayloadRetention {
 
         @Test
-        void keepsTheRawPayloadOnAValidationFailure() {
-            String raw = json("""
-                    "timestamp":"%s","sensor_id":"s-1","metric_type":"pipe_pressure","status":"OK"
-                    """.formatted(TS));
-
+        void keepsJacksonsErrorAsTheCause() {
             assertThatExceptionOfType(InvalidTelemetryException.class)
-                    .isThrownBy(() -> parser.parse(raw))
-                    .satisfies(e -> assertThat(e.payload()).isEqualTo(raw));
-        }
-
-        @Test
-        void keepsTheRawPayloadOnAParseFailure() {
-            String raw = "{\"sensor_id\":\"s-1\"";
-
-            assertThatExceptionOfType(InvalidTelemetryException.class)
-                    .isThrownBy(() -> parser.parse(raw))
-                    .satisfies(e -> {
-                        assertThat(e.payload()).isEqualTo(raw);
-                        assertThat(e.getCause()).isNotNull();
-                    });
+                    .isThrownBy(() -> parser.parse("{\"sensor_id\":\"s-1\""))
+                    .withCauseInstanceOf(JacksonException.class);
         }
     }
 }

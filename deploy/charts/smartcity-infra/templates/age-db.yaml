@@ -87,6 +87,9 @@ spec:
         name: data
       spec:
         accessModes: ["ReadWriteOnce"]
+        {{- with .Values.storage.className }}
+        storageClassName: {{ . }}
+        {{- end }}
         resources:
           requests:
             storage: {{ .Values.ageDb.storage }}

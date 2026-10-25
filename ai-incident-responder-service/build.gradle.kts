@@ -18,12 +18,10 @@ repositories {
 }
 
 dependencies {
-	implementation("org.springframework.boot:spring-boot-starter")
 	// No HTTP API of its own; the web starter exists so the actuator can serve
 	// /actuator/health/{liveness,readiness} to Kubernetes probes and /actuator/prometheus to a scraper.
 	implementation("org.springframework.boot:spring-boot-starter-web")
 	implementation("org.springframework.boot:spring-boot-starter-jdbc")
-	implementation("org.springframework.boot:spring-boot-starter-json")
 	implementation("org.springframework.boot:spring-boot-starter-actuator")
 	// Boot 4 splits metrics out of the actuator starter: this starter wires Micrometer, the registry
 	// exposes /actuator/prometheus.
@@ -52,4 +50,19 @@ dependencies {
 
 tasks.withType<Test> {
 	useJUnitPlatform()
+}
+
+// The token-budget test calls the Claude count-tokens endpoint (needs ANTHROPIC_API_KEY): keep it out of `build`.
+tasks.test {
+	useJUnitPlatform { excludeTags("llm") }
+}
+
+val promptTokens by tasks.registering(Test::class) {
+	description = "Counts the incident prompt's input tokens with the Claude count-tokens endpoint (needs ANTHROPIC_API_KEY)."
+	group = "verification"
+	testClassesDirs = sourceSets.test.get().output.classesDirs
+	classpath = sourceSets.test.get().runtimeClasspath
+	useJUnitPlatform { includeTags("llm") }
+	outputs.upToDateWhen { false }
+	testLogging { showStandardStreams = true }
 }

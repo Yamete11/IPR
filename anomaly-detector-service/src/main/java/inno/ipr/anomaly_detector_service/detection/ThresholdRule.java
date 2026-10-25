@@ -4,80 +4,44 @@ import inno.ipr.anomaly_detector_service.domain.MetricWindow;
 
 import java.math.BigDecimal;
 import java.util.Optional;
-import java.util.function.ToDoubleFunction;
 
 /**
- * A per-{@code metric_type} threshold rule evaluated against a {@link MetricWindow}. Rules read the
- * boundary aggregate ({@code min} or {@code max}) rather than the average, so any excursion within
- * the 5-minute bucket trips the rule even when it is surrounded by healthy readings.
+ * A per-{@code metric_type} threshold rule evaluated against a {@link MetricWindow}. Rules read a
+ * boundary value ({@code min} or {@code max}) rather than the average, so any excursion within the
+ * bucket trips the rule even when it is surrounded by healthy readings. Instances are bound straight
+ * from {@code anomaly.rules[]} (see {@link AnomalyRulesProperties}); the constructor rejects a blank
+ * metric, a missing aggregate or comparison, and a non-finite threshold.
  *
- * <p>The active rule set is configured in {@code application.yaml} under {@code anomaly.rules[]}
- * (bound by {@link AnomalyRulesProperties}) and validated once at startup by
- * {@link ThresholdRuleRegistry}. Build instances with {@link #of}, which derives the {@code label}
- * so the wire format is uniform: {@code <metric>_<min|max><op><threshold>}, e.g.
- * {@code pipe_pressure_min<0.5}.
+ * <p>{@link Aggregate} names which boundary value of the window a rule reads; {@link Comparison} is
+ * the breach direction.
+ *
+ * <p>{@link #evaluate(MetricWindow)} returns a {@link Breach} (the boundary value and the label) when
+ * the value is strictly below/above the threshold, otherwise empty; sitting exactly on the threshold
+ * is not a breach.
+ *
+ * <p>{@link #label()} is the rule id carried on the alert, {@code <metric>_<min|max><op><threshold>},
+ * e.g. {@code pipe_pressure_min<0.5}; the threshold drops a spurious {@code .0} ({@code 120.0} →
+ * {@code 120}).
  *
  * @param metricType metric this rule applies to, e.g. {@code pipe_pressure}
  * @param aggregate  which boundary of the window to test
  * @param comparison breach direction against {@code threshold}
  * @param threshold  the limit
- * @param label      human-readable rule id carried on the alert, e.g. {@code pipe_pressure_min<0.5}
  */
 public record ThresholdRule(
         String metricType,
         Aggregate aggregate,
         Comparison comparison,
-        double threshold,
-        String label) {
+        double threshold) {
 
-    /** Which boundary value of the window a rule reads. */
-    public enum Aggregate {
-        MIN(MetricWindow::min, "min"),
-        MAX(MetricWindow::max, "max");
+    public enum Aggregate { MIN, MAX }
 
-        private final ToDoubleFunction<MetricWindow> extractor;
-        private final String token;
+    public enum Comparison { BELOW, ABOVE }
 
-        Aggregate(ToDoubleFunction<MetricWindow> extractor, String token) {
-            this.extractor = extractor;
-            this.token = token;
-        }
-
-        double of(MetricWindow window) {
-            return extractor.applyAsDouble(window);
-        }
+    public record Breach(double value, String rule) {
     }
 
-    /** Breach direction: the value is out of bounds when it falls below/above the threshold. */
-    public enum Comparison {
-        BELOW("<") {
-            @Override
-            boolean breached(double value, double threshold) {
-                return value < threshold;
-            }
-        },
-        ABOVE(">") {
-            @Override
-            boolean breached(double value, double threshold) {
-                return value > threshold;
-            }
-        };
-
-        private final String symbol;
-
-        Comparison(String symbol) {
-            this.symbol = symbol;
-        }
-
-        abstract boolean breached(double value, double threshold);
-    }
-
-    /**
-     * Builds a rule with a derived label. The threshold is rendered without a spurious {@code .0}
-     * ({@code 120.0} → {@code 120}) but otherwise verbatim ({@code 0.5} stays {@code 0.5}).
-     */
-    public static ThresholdRule of(String metricType, Aggregate aggregate, Comparison comparison,
-                                   double threshold) {
+    public ThresholdRule {
         if (metricType == null || metricType.isBlank()) {
             throw new IllegalArgumentException("metricType must not be blank");
         }
@@ -87,29 +51,29 @@ public record ThresholdRule(
         if (!Double.isFinite(threshold)) {
             throw new IllegalArgumentException("threshold must be finite for " + metricType + ": " + threshold);
         }
-        String label = metricType + "_" + aggregate.token + comparison.symbol + formatThreshold(threshold);
-        return new ThresholdRule(metricType, aggregate, comparison, threshold, label);
     }
 
-    private static String formatThreshold(double threshold) {
-        return BigDecimal.valueOf(threshold).stripTrailingZeros().toPlainString();
-    }
-
-    /**
-     * Evaluates this rule against a window, returning the breaching value and rule label when the
-     * threshold is crossed, otherwise empty.
-     */
     public Optional<Breach> evaluate(MetricWindow window) {
-        double value = aggregate.of(window);
-        if (comparison.breached(value, threshold)) {
-            return Optional.of(new Breach(value, label));
-        }
-        return Optional.empty();
+        double value = switch (aggregate) {
+            case MIN -> window.min();
+            case MAX -> window.max();
+        };
+        boolean breached = switch (comparison) {
+            case BELOW -> value < threshold;
+            case ABOVE -> value > threshold;
+        };
+        return breached ? Optional.of(new Breach(value, label())) : Optional.empty();
     }
 
-    /**
-     * A tripped rule: the boundary value that crossed the threshold and the rule label that fired.
-     */
-    public record Breach(double value, String rule) {
+    public String label() {
+        String boundary = switch (aggregate) {
+            case MIN -> "min";
+            case MAX -> "max";
+        };
+        String operator = switch (comparison) {
+            case BELOW -> "<";
+            case ABOVE -> ">";
+        };
+        return metricType + "_" + boundary + operator + BigDecimal.valueOf(threshold).stripTrailingZeros().toPlainString();
     }
 }

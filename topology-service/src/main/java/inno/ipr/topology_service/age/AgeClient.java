@@ -2,6 +2,7 @@ package inno.ipr.topology_service.age;
 
 import inno.ipr.topology_service.exception.AgeQueryException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.PreparedStatementSetter;
 import org.springframework.jdbc.core.ResultSetExtractor;
 import org.springframework.stereotype.Component;
 
@@ -12,26 +13,47 @@ import java.util.regex.Pattern;
 
 /**
  * Thin JDBC wrapper around Apache AGE. Every Cypher statement is run as an SQL
- * {@code SELECT * FROM cypher('<graph>', $$ ... $$) AS (...)} call.
+ * {@code SELECT * FROM cypher('<graph>', $$ ... $$) AS (...)} call. The {@code search_path} that
+ * makes {@code cypher()}/{@code create_graph()} resolve is set once per connection by Hikari's
+ * {@code connection-init-sql} (see {@code application.yaml}).
  *
- * <p>The per-connection {@code search_path} (which puts {@code ag_catalog} on the path so
- * {@code cypher()}/{@code create_graph()} resolve) is configured once via Hikari's
- * {@code connection-init-sql} in {@code application.yaml}; this client assumes it is already set.
+ * <p>The graph name, vertex labels, edge types and property names cannot be bound as parameters
+ * in AGE, so they are interpolated — after {@link #checkIdentifier(String, String)} has matched
+ * them against {@code IDENTIFIER}. The check runs before each method's try/catch, so its failure is
+ * not re-wrapped as a query error.
  *
- * <p>Parameters are passed as a single agtype map (the {@code $key} references inside the
- * statement). The JSON string is bound as {@link Types#OTHER} so PostgreSQL applies the agtype
- * input function via the {@code ?::agtype} cast instead of rejecting a {@code varchar} argument.
+ * <p>{@link #ensureGraph(String)} creates the graph if missing; {@code create_graph} errors when the
+ * graph already exists, so {@code ag_graph} is probed first.
  *
- * <p>The graph name is the one value that cannot be bound as a parameter — {@code cypher()} and
- * {@code create_graph()} both take it as a literal — so it is validated against
- * {@link #GRAPH_NAME} before being interpolated. It reaches this class from configuration
- * ({@code topology.graph}), which is not as tightly controlled as the in-repo seed file.
+ * <p>{@link #ensurePropertyIndex(String, String)} creates a GIN index over one vertex label's
+ * {@code properties}, so the {@code MATCH (n:Label {id: $id})} that starts every traversal is an
+ * index probe (AGE compiles it to agtype containment {@code @>}, which GIN supports).
+ *
+ * <p>{@link #ensureEdgeIndexes(String, String)} creates B-tree indexes on {@code start_id} and
+ * {@code end_id} of one edge type's table. AGE creates none, so without them every hop of a pattern
+ * scans the edge table, in both directions ({@code dependents} walks start → end,
+ * {@code dependencies} end → start).
+ *
+ * <p>Both index methods are idempotent ({@code IF NOT EXISTS}) and no-ops for a label whose table
+ * does not exist yet: AGE only materialises {@code "<graph>"."<Label>"} with its first vertex/edge,
+ * which {@code labelExists(String, String)} checks.
+ *
+ * <p>{@link #execute(String, String, String)} runs a write statement. A non-null {@code paramsJson}
+ * is the agtype map behind the statement's {@code $key} references, bound as {@link Types#OTHER} so
+ * the {@code ?::agtype} cast applies AGE's input function. It returns the number of rows produced:
+ * a bare write ({@code MERGE} without {@code RETURN}) always yields 0, so add a {@code RETURN} when
+ * the caller must tell "written" from "{@code MATCH} found nothing" — the latter reports no error.
+ *
+ * <p>{@link #count(String, String)} runs a statement returning one scalar count, used to log graph
+ * state after seeding.
+ *
+ * <p>{@link #checkIdentifier(String, String)} rejects anything that is not a plain identifier;
+ * {@code kind} ("graph", "label", "property") only shapes the error message.
  */
 @Component
 public class AgeClient {
 
-    /** Graph names are interpolated into SQL/Cypher text, so they must be plain identifiers. */
-    private static final Pattern GRAPH_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+    private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
 
     private final JdbcTemplate jdbc;
 
@@ -39,23 +61,8 @@ public class AgeClient {
         this.jdbc = jdbc;
     }
 
-    /**
-     * Rejects any graph name that is not a bare identifier, so it can be safely interpolated.
-     * Called before the surrounding try/catch so the failure is not re-wrapped as a query error.
-     */
-    private static String checkGraphName(String graph) {
-        if (graph == null || !GRAPH_NAME.matcher(graph).matches()) {
-            throw new AgeQueryException("Illegal AGE graph name: " + graph);
-        }
-        return graph;
-    }
-
-    /**
-     * Creates the AGE graph if it does not exist yet. {@code create_graph} is not idempotent
-     * (it errors when the graph is already present), so we probe {@code ag_graph} first.
-     */
     public void ensureGraph(String graph) {
-        checkGraphName(graph);
+        checkIdentifier("graph", graph);
         try {
             Integer existing = jdbc.queryForObject(
                     "SELECT count(*) FROM ag_catalog.ag_graph WHERE name = ?",
@@ -68,63 +75,65 @@ public class AgeClient {
         }
     }
 
-    /**
-     * Creates a GIN index over the {@code properties} column of one label's vertex table, so a
-     * {@code MATCH (n:Label {id: $id})} lookup — every dependency traversal starts with one — is an
-     * index probe rather than a scan of the label table. AGE stores each label as a plain table
-     * {@code "<graph>"."<Label>"(id graphid, properties agtype)} that only exists once the first
-     * vertex of that label has been written, hence the existence check; on a label the seed never
-     * uses this is a no-op. {@code IF NOT EXISTS} makes it idempotent across restarts.
-     *
-     * <p>{@code label} must already be validated (it comes from the {@code VertexLabel} allow-list),
-     * because like the graph name it is interpolated, not bound.
-     */
     public void ensurePropertyIndex(String graph, String label) {
-        checkGraphName(graph);
-        checkLabelName(label);
+        checkIdentifier("graph", graph);
+        checkIdentifier("label", label);
         try {
-            if (!labelExists(graph, label)) {
-                return;
+            if (labelExists(graph, label)) {
+                createIndex(graph + "_" + label + "_props_gin", graph, label, "USING gin (properties)");
             }
-            String index = graph + "_" + label + "_props_gin";
-            jdbc.execute("CREATE INDEX IF NOT EXISTS \"" + index + "\" ON \"" + graph + "\".\"" + label
-                    + "\" USING gin (properties)");
         } catch (RuntimeException e) {
             throw new AgeQueryException("Failed to ensure property index on '" + graph + "'.'" + label + "'", e);
         }
     }
 
-    /**
-     * Creates B-tree indexes on {@code start_id} and {@code end_id} of one edge type's table
-     * {@code "<graph>"."<Type>"(id, start_id, end_id, properties)}. AGE creates none, so without them
-     * every hop of a Cypher pattern ({@code (a)-[r]->(b)}) is a scan of the edge table, in both
-     * directions ({@code dependents} walks start → end, {@code dependencies} end → start). Same
-     * existence check and idempotency as {@link #ensurePropertyIndex(String, String)}.
-     */
     public void ensureEdgeIndexes(String graph, String type) {
-        checkGraphName(graph);
-        checkLabelName(type);
+        checkIdentifier("graph", graph);
+        checkIdentifier("label", type);
         try {
-            if (!labelExists(graph, type)) {
-                return;
-            }
-            for (String column : new String[]{"start_id", "end_id"}) {
-                String index = graph + "_" + type + "_" + column;
-                jdbc.execute("CREATE INDEX IF NOT EXISTS \"" + index + "\" ON \"" + graph + "\".\"" + type
-                        + "\" (" + column + ")");
+            if (labelExists(graph, type)) {
+                createIndex(graph + "_" + type + "_start_id", graph, type, "(start_id)");
+                createIndex(graph + "_" + type + "_end_id", graph, type, "(end_id)");
             }
         } catch (RuntimeException e) {
             throw new AgeQueryException("Failed to ensure edge indexes on '" + graph + "'.'" + type + "'", e);
         }
     }
 
-    private static void checkLabelName(String label) {
-        if (label == null || !GRAPH_NAME.matcher(label).matches()) {
-            throw new AgeQueryException("Illegal AGE label name: " + label);
+    public int execute(String graph, String cypher, String paramsJson) {
+        checkIdentifier("graph", graph);
+        boolean hasParams = paramsJson != null;
+        String sql = "SELECT * FROM cypher('" + graph + "', $$ " + cypher + " $$"
+                + (hasParams ? ", ?::agtype" : "") + ") AS (v agtype)";
+        PreparedStatementSetter bind = ps -> {
+            if (hasParams) {
+                ps.setObject(1, paramsJson, Types.OTHER);
+            }
+        };
+        try {
+            return jdbc.query(sql, bind, (ResultSetExtractor<Integer>) AgeClient::countRows);
+        } catch (RuntimeException e) {
+            throw new AgeQueryException("Cypher execution failed on graph '" + graph + "': " + cypher, e);
         }
     }
 
-    /** A label's table only exists once the first vertex/edge with that label has been written. */
+    public long count(String graph, String matchReturnCount) {
+        checkIdentifier("graph", graph);
+        try {
+            String sql = "SELECT * FROM cypher('" + graph + "', $$ " + matchReturnCount + " $$) AS (c agtype)";
+            String result = jdbc.queryForObject(sql, String.class);
+            return result == null ? 0L : Long.parseLong(result.trim());
+        } catch (RuntimeException e) {
+            throw new AgeQueryException("Cypher count failed on graph '" + graph + "': " + matchReturnCount, e);
+        }
+    }
+
+    public static void checkIdentifier(String kind, String name) {
+        if (name == null || !IDENTIFIER.matcher(name).matches()) {
+            throw new AgeQueryException("Illegal AGE " + kind + " name: " + name);
+        }
+    }
+
     private boolean labelExists(String graph, String label) {
         Integer present = jdbc.queryForObject("""
                 SELECT count(*) FROM ag_catalog.ag_label l
@@ -134,29 +143,9 @@ public class AgeClient {
         return present != null && present > 0;
     }
 
-    /**
-     * Runs a write Cypher statement. When {@code paramsJson} is non-null it is passed as the
-     * agtype parameter map, referenced as {@code $key} inside {@code cypher}.
-     *
-     * @return the number of rows the statement produced. A bare write ({@code MERGE} with no
-     *         {@code RETURN}) always yields 0; add a {@code RETURN} to the statement when the
-     *         caller needs to distinguish "written" from "matched nothing" — a {@code MATCH ...
-     *         MERGE} whose {@code MATCH} finds no rows performs no write and reports no error.
-     */
-    public int execute(String graph, String cypher, String paramsJson) {
-        checkGraphName(graph);
-        try {
-            if (paramsJson == null) {
-                String sql = "SELECT * FROM cypher('" + graph + "', $$ " + cypher + " $$) AS (v agtype)";
-                return jdbc.query(sql, (ResultSetExtractor<Integer>) AgeClient::countRows);
-            }
-            String sql = "SELECT * FROM cypher('" + graph + "', $$ " + cypher + " $$, ?::agtype) AS (v agtype)";
-            return jdbc.query(sql,
-                    ps -> ps.setObject(1, paramsJson, Types.OTHER),
-                    (ResultSetExtractor<Integer>) AgeClient::countRows);
-        } catch (RuntimeException e) {
-            throw new AgeQueryException("Cypher execution failed on graph '" + graph + "': " + cypher, e);
-        }
+    private void createIndex(String index, String graph, String table, String definition) {
+        jdbc.execute("CREATE INDEX IF NOT EXISTS \"" + index + "\" ON \"" + graph + "\".\"" + table + "\" "
+                + definition);
     }
 
     private static int countRows(ResultSet rs) throws SQLException {
@@ -165,20 +154,5 @@ public class AgeClient {
             rows++;
         }
         return rows;
-    }
-
-    /**
-     * Runs a Cypher statement that returns a single scalar count (e.g.
-     * {@code MATCH (n) RETURN count(n)}). Used to verify/log graph state after seeding.
-     */
-    public long count(String graph, String matchReturnCount) {
-        checkGraphName(graph);
-        try {
-            String sql = "SELECT * FROM cypher('" + graph + "', $$ " + matchReturnCount + " $$) AS (c agtype)";
-            String result = jdbc.queryForObject(sql, String.class);
-            return result == null ? 0L : Long.parseLong(result.trim());
-        } catch (RuntimeException e) {
-            throw new AgeQueryException("Cypher count failed on graph '" + graph + "': " + matchReturnCount, e);
-        }
     }
 }

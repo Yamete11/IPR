@@ -26,11 +26,11 @@ type Metric {
 
 type Query {
   # Most recent incidents first.
-  incidents(limit: Int = 50): [Incident!]!
+  incidents(limit: Int! = 50): [Incident!]!
   # A single incident by its incident_id.
   incident(id: ID!): Incident
   # Incidents for one sensor, most recent first.
-  incidentsBySensor(sensorId: ID!, limit: Int = 50): [Incident!]!
+  incidentsBySensor(sensorId: ID!, limit: Int! = 50): [Incident!]!
   # Recent raw readings for one sensor (dashboard charts), most recent first.
-  recentMetrics(sensorId: ID!, limit: Int = 100): [Metric!]!
+  recentMetrics(sensorId: ID!, limit: Int! = 100): [Metric!]!
 }

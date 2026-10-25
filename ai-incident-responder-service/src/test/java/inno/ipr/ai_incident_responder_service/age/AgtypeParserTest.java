@@ -9,7 +9,13 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** agtype text → Java, as AGE actually returns it from a {@code cypher()} SELECT. */
+/**
+ * agtype text → Java, as AGE actually returns it from a {@code cypher()} SELECT.
+ *
+ * <p>{@code malformedIsLoud}: only a value wrapped in quotes on both ends is treated as a JSON
+ * string; anything else (e.g. an unterminated quote) is passed through verbatim rather than guessed
+ * at.
+ */
 class AgtypeParserTest {
 
     private final AgtypeParser parser = new AgtypeParser(JsonMapper.builder().build());
@@ -56,8 +62,6 @@ class AgtypeParserTest {
         assertThatThrownBy(() -> parser.parseMap("{not json"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("{not json");
-        // Only a value wrapped in quotes on both ends is treated as a JSON string; anything else is
-        // passed through verbatim rather than guessed at.
         assertThat(parser.parseScalar("\"unterminated")).isEqualTo("\"unterminated");
     }
 }

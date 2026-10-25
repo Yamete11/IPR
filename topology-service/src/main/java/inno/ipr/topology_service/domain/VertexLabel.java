@@ -1,4 +1,4 @@
-package inno.ipr.topology_service.domain.vertex;
+package inno.ipr.topology_service.domain;
 
 /**
  * The closed set of vertex labels in the {@code city_topology} AGE graph.
@@ -6,7 +6,8 @@ package inno.ipr.topology_service.domain.vertex;
  * <p>AGE cannot parameterise a node label — it must be a literal inside the Cypher text.
  * This enum is the allow-list the seed loader validates every incoming label against before
  * interpolating it into a statement, so a label coming from the seed file can never inject
- * arbitrary Cypher.
+ * arbitrary Cypher. {@link #label()} returns the label exactly as it appears in Cypher / the
+ * seed file.
  */
 public enum VertexLabel {
 
@@ -21,7 +22,6 @@ public enum VertexLabel {
         this.label = label;
     }
 
-    /** The label exactly as it appears in Cypher / the seed file. */
     public String label() {
         return label;
     }

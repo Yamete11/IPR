@@ -1,11 +1,12 @@
-package inno.ipr.topology_service.domain.edge;
+package inno.ipr.topology_service.domain;
 
 /**
  * The closed set of edge (relationship) types in the {@code city_topology} AGE graph.
  *
- * <p>Like {@link inno.ipr.topology_service.domain.vertex.VertexLabel}, a relationship type
+ * <p>Like {@link VertexLabel}, a relationship type
  * cannot be parameterised in AGE Cypher, so this enum is the allow-list the seed loader
- * checks before interpolating a type into a statement.
+ * checks before interpolating a type into a statement. {@link #type()} returns the relationship
+ * type exactly as it appears in Cypher / the seed file.
  */
 public enum EdgeType {
 
@@ -19,7 +20,6 @@ public enum EdgeType {
         this.type = type;
     }
 
-    /** The relationship type exactly as it appears in Cypher / the seed file. */
     public String type() {
         return type;
     }

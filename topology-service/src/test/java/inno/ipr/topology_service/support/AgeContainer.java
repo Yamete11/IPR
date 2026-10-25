@@ -8,11 +8,11 @@ import org.testcontainers.utility.DockerImageName;
 /**
  * Apache AGE in a container, configured like {@code age-db} in the repo's docker-compose.yml:
  * same image, AGE preloaded, extension created, and a pool whose connections get the same
- * {@code search_path} as topology-service's Hikari {@code connection-init-sql}.
+ * {@code search_path} as topology-service's Hikari {@code connection-init-sql}. {@code IMAGE}
+ * matches the image pinned in docker-compose.yml.
  */
 public final class AgeContainer {
 
-    /** Matches the image pinned in docker-compose.yml. */
     private static final DockerImageName IMAGE = DockerImageName
             .parse("apache/age:release_PG16_1.6.0")
             .asCompatibleSubstituteFor("postgres");

@@ -31,14 +31,52 @@ import java.util.Map;
 /**
  * Kafka wiring for the responder — a consumer of {@code infrastructure-alerts} with a DLQ producer.
  *
+ * <p>{@link #infrastructureAlertsDlqTopic()} declares the dead-letter topic; the autoconfigured
+ * {@code KafkaAdmin} creates it. The source topic {@code infrastructure-alerts} is owned/created by
+ * anomaly-detector-service.
+ *
+ * <p>{@code REPLICAS} is 1 for the single-broker local dev setup; in Kubernetes Strimzi sets the
+ * replication factor.
+ *
+ * <p>{@link #dlqKafkaTemplate(String)} is a dedicated producer for dead-lettering.
+ * {@link StringSerializer} matches the {@code String} payloads the listener consumes, so a poison
+ * record republishes to the DLQ verbatim.
+ *
+ * <p>{@link #kafkaBackOffScheduler()} is the scheduler that resumes a paused listener container
+ * once its back-off elapses. It is declared here rather than relying on the autoconfigured one,
+ * which Boot only provides when the app enables scheduling (this service does not).
+ *
+ * <p>{@link #errorHandler(KafkaTemplate, ListenerContainerRegistry, TaskScheduler)} is the
+ * listener container's error handler, mirroring ingestion-service. The failure modes need opposite
+ * policies:
+ *
  * <ul>
- *   <li>{@link NewTopic} declares the dead-letter topic; the autoconfigured {@code KafkaAdmin}
- *       creates it. (The source topic {@code infrastructure-alerts} is owned/created by
- *       anomaly-detector-service.)</li>
- *   <li>{@link DefaultErrorHandler} splits the two failure modes apart, mirroring
- *       ingestion-service: a poison alert ({@link InvalidAlertException}) dead-letters at once,
- *       while transient Claude/DB failures are retried with an unlimited exponential back-off.</li>
+ *   <li><b>Bad data</b> ({@link InvalidAlertException}) is non-retryable — no amount of waiting
+ *       makes a malformed alert parseable — so it goes straight to
+ *       {@code infrastructure-alerts.DLQ} instead of stalling its partition first.</li>
+ *   <li><b>Permanent failures</b> ({@code ResilienceConfig.PERMANENT_FAILURES}: a refusal, a
+ *       truncated or empty plan, an Anthropic 4xx other than 429) are non-retryable for the same
+ *       reason: the identical prompt fails identically, so retrying would block the partition and
+ *       re-bill a doomed Claude call every 30s, forever.</li>
+ *   <li><b>Everything else</b> — a Claude outage, an open circuit breaker, TimescaleDB or age-db
+ *       restarting — is retried with an unlimited exponential back-off (the max interval is capped
+ *       at 30s; the max elapsed time stays at its unlimited default). A short fixed budget is
+ *       actively harmful here: the breaker stays open for 30s at a stretch, so a handful of
+ *       retries spaced a couple of seconds apart all fail fast with
+ *       {@code CallNotPermittedException} and dead-letter a <em>valid</em> alert into a topic
+ *       nothing consumes — the precise outcome the breaker exists to prevent. Kafka is already
+ *       holding the alert; waiting for Claude to come back beats losing an incident.</li>
  * </ul>
+ *
+ * <p>The DLQ partition is left to the producer ({@code -1}), so the dead-letter topic needs no
+ * particular partition count — pinning the source partition fails whenever the DLQ has fewer.
+ *
+ * <p>The back-off runs through a {@link ContainerPausingBackOffHandler}, which pauses the
+ * container instead of sleeping the consumer thread. Blocking would run a poll batch past
+ * {@code max.poll.interval.ms} during any sustained outage and drop the consumer into a
+ * rebalance loop. The recoverer logs the offending record before it leaves for the DLQ —
+ * otherwise the only trace an operator gets is an exception message with no sight of the record
+ * that caused it.
  */
 @Configuration
 public class KafkaConfig {
@@ -49,17 +87,13 @@ public class KafkaConfig {
     public static final String DLQ_TOPIC = "infrastructure-alerts.DLQ";
 
     private static final int PARTITIONS = 3;
-    private static final short REPLICAS = 1; // single-broker local dev; Strimzi sets this in K8s
+    private static final short REPLICAS = 1;
 
     @Bean
     NewTopic infrastructureAlertsDlqTopic() {
         return TopicBuilder.name(DLQ_TOPIC).partitions(PARTITIONS).replicas(REPLICAS).build();
     }
 
-    /**
-     * Dedicated producer for dead-lettering. {@link StringSerializer} matches the {@code String}
-     * payloads the listener consumes, so a poison record republishes to the DLQ verbatim.
-     */
     @Bean
     KafkaTemplate<String, String> dlqKafkaTemplate(
             @Value("${spring.kafka.bootstrap-servers}") String bootstrapServers) {
@@ -71,11 +105,6 @@ public class KafkaConfig {
         return new KafkaTemplate<>(factory);
     }
 
-    /**
-     * Scheduler that resumes a paused listener container once its back-off elapses. Declared here
-     * rather than relying on the autoconfigured one, which Boot only provides when the app enables
-     * scheduling (this service does not).
-     */
     @Bean
     TaskScheduler kafkaBackOffScheduler() {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
@@ -84,36 +113,13 @@ public class KafkaConfig {
         return scheduler;
     }
 
-    /**
-     * Error handler for the listener container. The two failure modes need opposite policies:
-     *
-     * <ul>
-     *   <li><b>Bad data</b> ({@link InvalidAlertException}) is non-retryable — no amount of waiting
-     *       makes a malformed alert parseable — so it goes straight to
-     *       {@code infrastructure-alerts.DLQ} instead of stalling its partition first.</li>
-     *   <li><b>Everything else</b> — a Claude outage, an open circuit breaker, TimescaleDB or age-db
-     *       restarting — is retried with an unlimited exponential back-off. A short fixed budget is
-     *       actively harmful here: the breaker stays open for 30s at a stretch, so a handful of
-     *       retries spaced a couple of seconds apart all fail fast with
-     *       {@code CallNotPermittedException} and dead-letter a <em>valid</em> alert into a topic
-     *       nothing consumes — the precise outcome the breaker exists to prevent. Kafka is already
-     *       holding the alert; waiting for Claude to come back beats losing an incident.</li>
-     * </ul>
-     *
-     * <p>The back-off runs through a {@link ContainerPausingBackOffHandler}, which pauses the
-     * container instead of sleeping the consumer thread. Blocking would run a poll batch past
-     * {@code max.poll.interval.ms} during any sustained outage and drop the consumer into a
-     * rebalance loop.
-     */
     @Bean
     DefaultErrorHandler errorHandler(KafkaTemplate<String, String> dlqKafkaTemplate,
                                      ListenerContainerRegistry registry,
                                      TaskScheduler kafkaBackOffScheduler) {
         DeadLetterPublishingRecoverer dlq = new DeadLetterPublishingRecoverer(dlqKafkaTemplate,
-                (record, exception) -> new TopicPartition(DLQ_TOPIC, record.partition()));
+                (record, exception) -> new TopicPartition(DLQ_TOPIC, -1));
 
-        // Log the offending record before it leaves for the DLQ — otherwise the only trace an
-        // operator gets is an exception message with no sight of the record that caused it.
         ConsumerRecordRecoverer recoverer = (record, exception) -> {
             log.error("Dead-lettering record from {}-{}@{} to {}: {} | payload={}",
                     record.topic(), record.partition(), record.offset(), DLQ_TOPIC,
@@ -122,12 +128,13 @@ public class KafkaConfig {
         };
 
         ExponentialBackOff backOff = new ExponentialBackOff(1_000L, 2.0);
-        backOff.setMaxInterval(30_000L); // unlimited attempts: max elapsed time stays at its default
+        backOff.setMaxInterval(30_000L);
         BackOffHandler pausing = new ContainerPausingBackOffHandler(
                 new ListenerContainerPauseService(registry, kafkaBackOffScheduler));
 
         DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff, pausing);
         handler.addNotRetryableExceptions(InvalidAlertException.class);
+        handler.addNotRetryableExceptions(ResilienceConfig.PERMANENT_FAILURES);
         return handler;
     }
 }

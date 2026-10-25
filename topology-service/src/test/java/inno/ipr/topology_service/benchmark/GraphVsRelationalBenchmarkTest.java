@@ -38,6 +38,24 @@ import static org.assertj.core.api.Assertions.assertThat;
  * substation at the root, distribution nodes on the inner levels, buildings on the leaves
  * (≈10k vertices). Run with {@code ./gradlew graphBenchmark}; excluded from {@code build}.
  * Writes {@code build/reports/graph-vs-sql.md}.
+ *
+ * <p>{@code load()} builds the vertices level by level, with ids encoding the tree position
+ * ({@code v}, {@code v.0}, {@code v.0.2}, ...). It also creates B-tree indexes on
+ * {@code start_id}/{@code end_id} of the AGE edge label tables: AGE indexes neither, so without them
+ * every hop of both AGE-backed variants would be a scan, while the plain edge table has its primary
+ * key on {@code (src, dst)}.
+ *
+ * <p>{@code cypherVersusSql()} compares a variable-depth walk (everything downstream, from three
+ * depths of the tree) and a fixed two-hop pattern (node → node → anything), for which JOINs are the
+ * natural relational form. {@code compare(String, Map)} runs every variant, asserts they all return
+ * the same ids, and times each; {@code executionMillis(Query)} reads PostgreSQL's "Execution Time"
+ * from {@code EXPLAIN ANALYZE} (server side, no network / JDBC).
+ *
+ * <p>{@code ageTablesCte(String)} is the same recursive CTE, but over the tables AGE itself stores
+ * the graph in: every edge label is a child of
+ * {@code <graph>._ag_label_edge(id, start_id, end_id, properties)} and every vertex label a child of
+ * {@code _ag_label_vertex(id, properties)}. It separates AGE's storage from its variable-length-path
+ * executor. The business id is read with {@code agtype_access_operator}.
  */
 @Tag("benchmark")
 @Testcontainers
@@ -67,7 +85,6 @@ class GraphVsRelationalBenchmarkTest {
         jdbc = new JdbcTemplate(dataSource);
         long start = System.nanoTime();
 
-        // Vertices level by level; ids encode the tree position (v, v.0, v.0.2, ...).
         List<List<String>> levels = new ArrayList<>();
         levels.add(List.of("v"));
         for (int d = 1; d <= DEPTH; d++) {
@@ -108,11 +125,8 @@ class GraphVsRelationalBenchmarkTest {
                         chunk.stream().map(e -> new Object[]{e.get("s"), e.get("d")}).toList());
             }
         }
-        // AGE indexes neither start_id nor end_id on edge label tables; without these every hop of both
-        // AGE-backed variants is a scan, while the plain edge table has its primary key on (src, dst).
         for (String edgeType : List.of("PowerLine", "Pipeline")) {
-            jdbc.execute("CREATE INDEX ON " + GRAPH + ".\"" + edgeType + "\" (start_id)");
-            jdbc.execute("CREATE INDEX ON " + GRAPH + ".\"" + edgeType + "\" (end_id)");
+            age.ensureEdgeIndexes(GRAPH, edgeType);
         }
         jdbc.execute("ANALYZE");
         loadMillis = (System.nanoTime() - start) / 1_000_000;
@@ -128,14 +142,12 @@ class GraphVsRelationalBenchmarkTest {
     @Test
     void cypherVersusSql() throws Exception {
         List<Result> results = new ArrayList<>();
-        // Variable-depth walk: everything downstream, from three depths of the tree.
         for (String start : List.of("v", "v.0.0.0.0", "v.0.0.0.0.0.0.0")) {
             results.add(compare("all dependents of `" + start + "`", Map.of(
                     CYPHER, cypherDependents(start),
                     AGE_CTE, ageTablesCte(start),
                     PLAIN_SQL, recursiveCte(start))));
         }
-        // Fixed two-hop pattern (node → node → anything): JOINs are the natural relational form here.
         results.add(compare("two hops below `v.0`", Map.of(
                 CYPHER, cypherTwoHops("v.0"),
                 PLAIN_SQL, joinTwoHops("v.0"))));
@@ -161,7 +173,6 @@ class GraphVsRelationalBenchmarkTest {
     private record Result(String name, int rows, Map<String, Timing> timings) {
     }
 
-    /** Runs every variant, asserts they all return the same ids, and times each. */
     private Result compare(String name, Map<String, Query> variants) {
         Set<String> expected = new HashSet<>(ids(variants.get(PLAIN_SQL)));
         assertThat(expected).as(name).isNotEmpty();
@@ -197,12 +208,6 @@ class GraphVsRelationalBenchmarkTest {
                 SELECT DISTINCT id FROM walk""".formatted(MAX_DEPTH), List.of(id));
     }
 
-    /**
-     * The same recursive CTE, but over the tables AGE itself stores the graph in: every edge label is
-     * a child of {@code <graph>._ag_label_edge(id, start_id, end_id, properties)} and every vertex label
-     * a child of {@code _ag_label_vertex(id, properties)}. Separates AGE's storage from its
-     * variable-length-path executor. The business id is read with {@code agtype_access_operator}.
-     */
     private static Query ageTablesCte(String id) {
         return new Query("""
                 WITH RECURSIVE walk (gid, depth) AS (
@@ -256,7 +261,6 @@ class GraphVsRelationalBenchmarkTest {
         return times[RUNS / 2];
     }
 
-    /** PostgreSQL's "Execution Time" from EXPLAIN ANALYZE (server side, no network / JDBC). */
     private double executionMillis(Query q) {
         List<String> plan = jdbc.query("EXPLAIN (ANALYZE, TIMING OFF) " + q.text(),
                 ps -> bind(ps, q.args()), (rs, n) -> rs.getString(1));

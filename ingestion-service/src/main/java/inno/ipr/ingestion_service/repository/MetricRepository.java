@@ -24,6 +24,17 @@ import java.util.List;
  * multi-row {@code INSERT ... VALUES (...), (...)} round trip, which is where the throughput comes
  * from. {@link #save} remains for the per-row fallback the consumer uses to pin down which row of
  * a failed batch the database rejected.
+ *
+ * <p>{@link #save(TelemetryMessage)} returns 1 if the reading was stored, 0 if an identical
+ * {@code (timestamp, sensor_id, metric_type)} row already existed and the insert was suppressed.
+ * Callers must not ignore the 0: it is the only signal that a measurement silently vanished,
+ * whether from a legitimate Kafka redelivery or from a producer emitting colliding timestamps.
+ *
+ * <p>{@link #saveAll(List)} returns one entry per message, in order: {@code 1} stored, {@code 0}
+ * suppressed as a duplicate, or {@link java.sql.Statement#SUCCESS_NO_INFO} ({@code -2}) when the
+ * driver rewrote the batch into a multi-row statement and cannot attribute row counts — the normal
+ * case with {@code reWriteBatchedInserts=true}, so duplicate counting is best-effort there and
+ * exact only through {@link #save}.
  */
 @Repository
 public class MetricRepository {
@@ -40,13 +51,6 @@ public class MetricRepository {
         this.jdbc = jdbc;
     }
 
-    /**
-     * @return 1 if the reading was stored, 0 if an identical
-     *         {@code (timestamp, sensor_id, metric_type)} row already existed and the insert was
-     *         suppressed. Callers must not ignore the 0: it is the only signal that a measurement
-     *         silently vanished, whether from a legitimate Kafka redelivery or from a producer
-     *         emitting colliding timestamps.
-     */
     public int save(TelemetryMessage m) {
         return jdbc.update(INSERT,
                 Timestamp.from(m.timestamp()),
@@ -56,15 +60,6 @@ public class MetricRepository {
                 m.status());
     }
 
-    /**
-     * Inserts a whole poll's worth of readings in one JDBC batch.
-     *
-     * @return one entry per message, in order: {@code 1} stored, {@code 0} suppressed as a duplicate,
-     *         or {@link java.sql.Statement#SUCCESS_NO_INFO} ({@code -2}) when the driver rewrote the
-     *         batch into a multi-row statement and cannot attribute row counts — the normal case
-     *         with {@code reWriteBatchedInserts=true}, so duplicate counting is best-effort here and
-     *         exact only through {@link #save}.
-     */
     public int[] saveAll(List<TelemetryMessage> messages) {
         return jdbc.batchUpdate(INSERT, new BatchPreparedStatementSetter() {
             @Override

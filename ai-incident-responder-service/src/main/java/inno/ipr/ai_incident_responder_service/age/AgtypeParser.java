@@ -10,6 +10,10 @@ import java.util.Map;
  * from topology-service — agtype is a JSON superset, so scalars come back quoted (e.g.
  * {@code "node-5"}) and property bags as JSON objects. Jackson 3 ({@code tools.jackson.databind})
  * unwraps escapes and coerces numbers/booleans to their natural types.
+ *
+ * <p>{@link #parseScalar(String)} unwraps a scalar agtype value ({@code "node-5"} →
+ * {@code node-5}); {@code null} stays null. {@link #parseMap(String)} parses an agtype map
+ * ({@code properties(n)}); {@code null}/{@code {}} yield an empty map.
  */
 @Component
 public class AgtypeParser {
@@ -20,7 +24,6 @@ public class AgtypeParser {
         this.objectMapper = objectMapper;
     }
 
-    /** Unwraps a scalar agtype value ({@code "node-5"} → {@code node-5}); {@code null} stays null. */
     public String parseScalar(String raw) {
         if (raw == null) {
             return null;
@@ -36,7 +39,6 @@ public class AgtypeParser {
         return trimmed;
     }
 
-    /** Parses an agtype map ({@code properties(n)}); {@code null}/{@code {}} yield an empty map. */
     @SuppressWarnings("unchecked")
     public Map<String, Object> parseMap(String raw) {
         if (raw == null) {

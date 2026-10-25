@@ -40,6 +40,10 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: earliest
       enable-auto-commit: false
+      properties:
+        # Cooperative rebalancing: only the partitions that move are revoked when a replica joins
+        # or leaves (the client default picks eager `range`, which stops every member).
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
 
 # Claude model for the remediation-plan call (ANTHROPIC_API_KEY comes from the environment).
 # ai.claude.mock=true swaps the real Claude call for a deterministic offline planner (no API key,

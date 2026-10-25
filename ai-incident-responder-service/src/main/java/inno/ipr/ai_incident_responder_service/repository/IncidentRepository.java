@@ -12,6 +12,12 @@ import org.springframework.stereotype.Repository;
  * <p>{@link #existsByAlertId(String)} + {@code ON CONFLICT (alert_id) DO NOTHING} implement the
  * Idempotent Consumer pattern: the consumer checks first to avoid a redundant (billed) Claude call,
  * and the unique constraint is the backstop if two deliveries race.
+ *
+ * <p>{@link #save(Incident)} returns 1 if the incident was stored, 0 if a row for this
+ * {@code alert_id} already existed and {@code ON CONFLICT DO NOTHING} suppressed the insert.
+ * Callers must not ignore the 0: it means a redelivery raced past
+ * {@link #existsByAlertId(String)} and the plan just produced — a billed Claude call — was
+ * discarded.
  */
 @Repository
 public class IncidentRepository {
@@ -36,12 +42,6 @@ public class IncidentRepository {
         return Boolean.TRUE.equals(jdbc.queryForObject(EXISTS, Boolean.class, alertId));
     }
 
-    /**
-     * @return 1 if the incident was stored, 0 if a row for this {@code alert_id} already existed and
-     *         {@code ON CONFLICT DO NOTHING} suppressed the insert. Callers must not ignore the 0:
-     *         it means a redelivery raced past {@link #existsByAlertId(String)} and the plan just
-     *         produced — a billed Claude call — was discarded.
-     */
     public int save(Incident incident) {
         return jdbc.update(INSERT,
                 incident.incidentId(),

@@ -15,11 +15,16 @@ import java.util.List;
  * {@code metrics}. Method names match the {@code Query} fields in {@code schema.graphqls}; each
  * delegates to a read repository. Stateless — no writes, no Kafka. {@code limit} arguments carry
  * their schema defaults, so they are always supplied by Spring for GraphQL.
+ *
+ * <p>{@link #clamp(int)} bounds every client-supplied {@code limit} to {@code [0, MAX_LIMIT]}
+ * ({@code MAX_LIMIT} = 1000) before it reaches {@code LIMIT ?}. The schema defaults are only
+ * defaults — a caller may send any {@code Int}, and both extremes are hostile against a hypertable:
+ * a huge limit pulls an unbounded result set into heap, while a negative one is a Postgres error
+ * rather than an empty page.
  */
 @Controller
 public class IncidentGraphQLController {
 
-    /** Ceiling applied to every client-supplied {@code limit} — see {@link #clamp(int)}. */
     private static final int MAX_LIMIT = 1000;
 
     private final IncidentReadRepository incidentRepository;
@@ -51,12 +56,6 @@ public class IncidentGraphQLController {
         return metricRepository.findRecentBySensor(sensorId, clamp(limit));
     }
 
-    /**
-     * Bounds a client-supplied {@code limit} before it reaches {@code LIMIT ?}. The schema defaults
-     * are only defaults — a caller may send any {@code Int}, and both extremes are hostile against a
-     * hypertable: a huge limit pulls an unbounded result set into heap, while a negative one is a
-     * Postgres error rather than an empty page.
-     */
     private static int clamp(int limit) {
         return Math.clamp(limit, 0, MAX_LIMIT);
     }

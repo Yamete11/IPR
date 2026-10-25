@@ -30,7 +30,7 @@ public class MockIncidentPlanner implements IncidentPlanner {
 
     @Override
     public IncidentPlan plan(Alert alert, MetricSummary history, List<ImpactedObject> impacted) {
-        List<String> objects = (impacted == null || impacted.isEmpty())
+        List<String> objects = impacted.isEmpty()
                 ? List.of(alert.sensorId())
                 : impacted.stream().map(o -> o.label() + " " + o.id()).toList();
         String primary = objects.get(0);

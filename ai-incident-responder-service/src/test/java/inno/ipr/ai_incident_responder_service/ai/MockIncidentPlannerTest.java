@@ -46,7 +46,6 @@ class MockIncidentPlannerTest {
     @DisplayName("falls back to the sensor itself when the graph resolves nothing")
     void fallsBackToSensor() {
         assertThat(planner.plan(ALERT, NO_HISTORY, List.of()).impactedObjects()).containsExactly("s-00042");
-        assertThat(planner.plan(ALERT, NO_HISTORY, null).impactedObjects()).containsExactly("s-00042");
     }
 
     @Test

@@ -18,12 +18,10 @@ repositories {
 }
 
 dependencies {
-	implementation("org.springframework.boot:spring-boot-starter")
 	// No HTTP API of its own; the web starter exists so the actuator can serve
 	// /actuator/health/{liveness,readiness} to Kubernetes probes and /actuator/prometheus to a scraper.
 	implementation("org.springframework.boot:spring-boot-starter-web")
 	implementation("org.springframework.boot:spring-boot-starter-jdbc")
-	implementation("org.springframework.boot:spring-boot-starter-json")
 	implementation("org.springframework.boot:spring-boot-starter-actuator")
 	// Boot 4 splits metrics out of the actuator starter: this starter wires Micrometer, the registry
 	// exposes /actuator/prometheus.

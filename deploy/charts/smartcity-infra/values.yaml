@@ -25,6 +25,29 @@ postgres:
 anthropic:
   apiKey: ""
 
+# Storage for the two StatefulSets' PVCs. The field is left out of volumeClaimTemplates when
+# className is empty, so the cluster default (Kind: `standard`, local-path, reclaimPolicy Delete)
+# provisions them. volumeClaimTemplates are immutable: changing className on an existing release
+# needs `kubectl delete statefulset --cascade=orphan` (PVCs stay) or a fresh cluster.
+storage:
+  className: ""
+  # Create a StorageClass of our own. Point className at it to use it, e.g.
+  #   --set storage.createClass=true --set storage.className=smartcity-retain
+  createClass: false
+  class:
+    name: smartcity-retain
+    provisioner: rancher.io/local-path
+    # Retain keeps the PV (and its data on the node) after the PVC is deleted.
+    reclaimPolicy: Retain
+    # Delay binding until a pod is scheduled, so the volume lands on that pod's node.
+    volumeBindingMode: WaitForFirstConsumer
+  # Static provisioning demo: a hand-made hostPath PV and a PVC bound to it by name, no
+  # provisioner involved. Nothing mounts it; `kubectl get pv,pvc` shows the binding.
+  staticPvDemo:
+    enabled: false
+    size: 1Gi
+    hostPath: /tmp/smartcity-static-pv
+
 ageDb:
   image: apache/age:release_PG16_1.6.0
   storage: 5Gi

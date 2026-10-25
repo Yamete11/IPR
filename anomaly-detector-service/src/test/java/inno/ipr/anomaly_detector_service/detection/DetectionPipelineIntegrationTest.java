@@ -37,20 +37,25 @@ import static org.mockito.BDDMockito.given;
  *
  * <p>The datasource is excluded (the aggregate repository is mocked and the continuous-aggregate
  * initializer is switched off), and the poll interval is shortened so the test observes several
- * ticks per second.
+ * ticks per second. With no datasource there is no {@code db} health contributor, so the readiness
+ * group includes only {@code readinessState}.
+ *
+ * <p>{@code edgeTriggeredAcrossPolls}: several ticks (at least 5 at 200 ms) see the same standing
+ * fault and produce exactly one alert; on recovery the series clears and nothing is published; a
+ * second breach is a new rising edge and produces exactly one more alert, with a new id.
+ *
+ * <p>{@code collectAlerts(String, Duration)} returns every alert for {@code sensor} that arrives
+ * within {@code window}, as parsed JSON maps.
  */
 @SpringBootTest(properties = {
         "spring.autoconfigure.exclude=org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
         "anomaly.schema.init-enabled=false",
         "anomaly.poll-interval-ms=200",
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
-        // No datasource means no 'db' health contributor for the readiness group to include.
         "management.endpoint.health.group.readiness.include=readinessState",
 })
 @EmbeddedKafka(partitions = 1)
 class DetectionPipelineIntegrationTest {
-
-    private static final Duration TIMEOUT = Duration.ofSeconds(20);
 
     @Autowired
     private EmbeddedKafkaBroker broker;
@@ -77,14 +82,13 @@ class DetectionPipelineIntegrationTest {
 
     @Test
     @DisplayName("one alert per fault across many polls, then a new alert after recovery")
-    void edgeTriggeredAcrossPolls() throws Exception {
+    void edgeTriggeredAcrossPolls() {
         String sensor = "s-" + UUID.randomUUID();
-        MetricWindow faulted = new MetricWindow(sensor, "pipe_pressure", Instant.now(), 1.0, 0.0, 4.0, 12);
-        MetricWindow healthy = new MetricWindow(sensor, "pipe_pressure", Instant.now(), 4.0, 3.6, 4.4, 12);
+        MetricWindow faulted = new MetricWindow(sensor, "pipe_pressure", Instant.now(), 0.0, 4.0);
+        MetricWindow healthy = new MetricWindow(sensor, "pipe_pressure", Instant.now(), 3.6, 4.4);
 
-        given(repository.findLatestWindows(any())).willReturn(List.of(faulted));
+        given(repository.findRecentWindows(any())).willReturn(List.of(faulted));
 
-        // Several ticks (≥ 5 at 200 ms) see the same standing fault: exactly one alert.
         List<Map<String, Object>> first = collectAlerts(sensor, Duration.ofSeconds(3));
         assertThat(first).hasSize(1);
         assertThat(first.get(0))
@@ -95,12 +99,10 @@ class DetectionPipelineIntegrationTest {
         assertThat((String) first.get(0).get("alert_id")).startsWith("a-");
         assertThat(first.get(0)).containsKey("detected_at");
 
-        // Recovery: the series clears, nothing is published.
-        given(repository.findLatestWindows(any())).willReturn(List.of(healthy));
+        given(repository.findRecentWindows(any())).willReturn(List.of(healthy));
         assertThat(collectAlerts(sensor, Duration.ofSeconds(2))).isEmpty();
 
-        // A second breach is a new rising edge: exactly one more alert, with a new id.
-        given(repository.findLatestWindows(any())).willReturn(List.of(faulted));
+        given(repository.findRecentWindows(any())).willReturn(List.of(faulted));
         List<Map<String, Object>> second = collectAlerts(sensor, Duration.ofSeconds(3));
         assertThat(second).hasSize(1);
         assertThat(second.get(0).get("alert_id")).isNotEqualTo(first.get(0).get("alert_id"));
@@ -108,17 +110,16 @@ class DetectionPipelineIntegrationTest {
 
     @Test
     @DisplayName("an unmonitored metric never produces an alert")
-    void unmonitoredMetricIsSilent() throws Exception {
+    void unmonitoredMetricIsSilent() {
         String sensor = "s-" + UUID.randomUUID();
-        given(repository.findLatestWindows(any()))
-                .willReturn(List.of(new MetricWindow(sensor, "humidity", Instant.now(), 0, 0, 0, 3)));
+        given(repository.findRecentWindows(any()))
+                .willReturn(List.of(new MetricWindow(sensor, "humidity", Instant.now(), 0, 0)));
 
         assertThat(collectAlerts(sensor, Duration.ofSeconds(2))).isEmpty();
     }
 
-    /** Every alert for {@code sensor} that arrives within {@code window}, as parsed JSON maps. */
     @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> collectAlerts(String sensor, Duration window) throws Exception {
+    private List<Map<String, Object>> collectAlerts(String sensor, Duration window) {
         List<Map<String, Object>> found = new ArrayList<>();
         long deadline = System.nanoTime() + window.toNanos();
         while (System.nanoTime() < deadline) {
@@ -128,7 +129,6 @@ class DetectionPipelineIntegrationTest {
                 }
             }
         }
-        assertThat(window).isLessThan(TIMEOUT);
         return found;
     }
 }

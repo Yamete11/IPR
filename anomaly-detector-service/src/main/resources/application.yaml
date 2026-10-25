@@ -30,7 +30,7 @@ anomaly:
     wait-timeout: ${ANOMALY_SCHEMA_WAIT_TIMEOUT:5m}
     wait-poll: 5s
   # Threshold rules, one per monitored metric_type (see detection/ThresholdRuleRegistry). Each rule
-  # reads a boundary aggregate (MIN/MAX) of the latest 5-minute window and fires when it is
+  # reads a boundary aggregate (MIN/MAX) of the two newest 5-minute windows and fires when it is
   # BELOW/ABOVE the threshold. The alert's `rule` label is derived as
   # <metric>_<min|max><op><threshold>, e.g. pipe_pressure_min<0.5. Thresholds sit just outside the
   # simulator's healthy band so an injected fault (pressure 0, temperature 130, voltage 0) trips.

@@ -1,6 +1,6 @@
 # Read API over the city_topology AGE graph (see TopologyGraphQLController).
 # Vertices/edges are modelled generically; `properties` is a real JSON scalar
-# (agtype -> JSON), wired via ExtendedScalars.Json in GraphQlConfig.
+# (agtype -> JSON), a pass-through scalar defined in GraphQlConfig.
 scalar JSON
 
 type Vertex {
@@ -29,7 +29,7 @@ type Query {
   impactSummary(id: ID!): ImpactSummary!
 
   # Directed paths from `from` to `to`, shortest first (at most `limit`, capped at 20).
-  paths(from: ID!, to: ID!, limit: Int = 5): [Path!]!
+  paths(from: ID!, to: ID!, limit: Int! = 5): [Path!]!
 
   # Hybrid SQL + Cypher: repair crews assigned to `id` or anything downstream of it.
   responsibleCrews(id: ID!): [Crew!]!

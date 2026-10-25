@@ -24,8 +24,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * The read repository against a real TimescaleDB with the {@code incidents} table exactly as
  * ai-incident-responder-service creates it. What matters here is the part no mock can cover: the
- * JSONB array columns coming back as text and being parsed into lists, plus ordering and the new
+ * JSONB array columns coming back as text and being parsed into lists, plus ordering and the
  * {@code LIMIT} on the per-sensor query.
+ *
+ * <p>{@code IMAGE} matches the image pinned in the repo's docker-compose.yml, and
+ * {@code INCIDENTS_DDL} is a copy (without comments) of
+ * {@code ai-incident-responder-service/src/main/resources/schema.sql}.
  *
  * <p>Self-skips when Docker is unavailable so {@code ./gradlew build} still passes without it.
  */
@@ -33,12 +37,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @EnabledIf("dockerAvailable")
 class IncidentReadRepositoryIntegrationTest {
 
-    /** Matches the image pinned in the repo's docker-compose.yml. */
     private static final DockerImageName IMAGE = DockerImageName
             .parse("timescale/timescaledb:2.28.3-pg16")
             .asCompatibleSubstituteFor("postgres");
 
-    /** Verbatim copy of ai-incident-responder-service/src/main/resources/schema.sql. */
     private static final String INCIDENTS_DDL = """
             CREATE TABLE IF NOT EXISTS incidents (
                 incident_id       TEXT PRIMARY KEY,

@@ -1,0 +1,46 @@
+{{- if .Values.storage.createClass }}
+# Dynamic provisioning: a PVC naming this class makes the provisioner create a matching PV.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storage.class.name }}
+  labels:
+    app.kubernetes.io/part-of: smartcity
+provisioner: {{ .Values.storage.class.provisioner }}
+reclaimPolicy: {{ .Values.storage.class.reclaimPolicy }}
+volumeBindingMode: {{ .Values.storage.class.volumeBindingMode }}
+{{- end }}
+{{- if .Values.storage.staticPvDemo.enabled }}
+---
+# Static provisioning: the PV is created by hand and the PVC claims it by name. The empty
+# storageClassName on both keeps the default StorageClass from provisioning a volume instead.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: smartcity-static-pv
+  labels:
+    app.kubernetes.io/part-of: smartcity
+spec:
+  storageClassName: ""
+  capacity:
+    storage: {{ .Values.storage.staticPvDemo.size }}
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: {{ .Values.storage.staticPvDemo.hostPath }}
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: smartcity-static-pvc
+  labels:
+    app.kubernetes.io/part-of: smartcity
+spec:
+  storageClassName: ""
+  volumeName: smartcity-static-pv
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.storage.staticPvDemo.size }}
+{{- end }}

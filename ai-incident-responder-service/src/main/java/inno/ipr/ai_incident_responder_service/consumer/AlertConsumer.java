@@ -3,6 +3,7 @@ package inno.ipr.ai_incident_responder_service.consumer;
 import inno.ipr.ai_incident_responder_service.ai.IncidentPlan;
 import inno.ipr.ai_incident_responder_service.ai.IncidentPlanner;
 import inno.ipr.ai_incident_responder_service.alert.Alert;
+import inno.ipr.ai_incident_responder_service.config.KafkaConfig;
 import inno.ipr.ai_incident_responder_service.domain.ImpactedObject;
 import inno.ipr.ai_incident_responder_service.domain.Incident;
 import inno.ipr.ai_incident_responder_service.domain.MetricSummary;
@@ -29,6 +30,21 @@ import java.util.UUID;
  * {@link InvalidAlertException} which the container's error handler dead-letters immediately, while
  * transient Claude/DB failures propagate and are retried (see {@code KafkaConfig}). The idempotency
  * check short-circuits redelivered alerts <em>before</em> any billed Claude call.
+ *
+ * <p>In {@link #onMessage(String)}, a save that stores 0 rows means {@code ON CONFLICT (alert_id)
+ * DO NOTHING} swallowed the row: a redelivery slipped past the {@code existsByAlertId} check while
+ * this one was in the Claude call. The incident is safe (the winning delivery wrote it), but the
+ * plan just paid for was discarded — which must not be logged as a successful persist.
+ *
+ * <p>{@code parse(String)} wraps only Jackson's own failures ({@code JacksonException}) as
+ * {@link InvalidAlertException}, because only those mean "the detector sent us garbage". Jackson 3
+ * exceptions are all unchecked, so catching {@code RuntimeException} would also swallow our own
+ * bugs and dead-letter a perfectly good alert under a misleading "malformed JSON" label.
+ * {@code toJson(List)} serialises a list to JSON for a {@code jsonb} column; a null list becomes
+ * {@code []}. {@code detected_at} is required because it anchors the metric-history window.
+ *
+ * <p>The consumer group id comes from {@code spring.kafka.consumer.group-id}, so it can be
+ * overridden per environment.
  */
 @Component
 public class AlertConsumer {
@@ -53,7 +69,7 @@ public class AlertConsumer {
         this.planner = planner;
     }
 
-    @KafkaListener(topics = "infrastructure-alerts", groupId = "ai-incident-responder")
+    @KafkaListener(topics = KafkaConfig.ALERTS_TOPIC)
     public void onMessage(String payload) {
         Alert alert = parse(payload);
 
@@ -62,7 +78,7 @@ public class AlertConsumer {
             return;
         }
 
-        MetricSummary history = metrics.findLastHour(alert.sensorId(), alert.metricType());
+        MetricSummary history = metrics.findLastHour(alert.sensorId(), alert.metricType(), alert.detectedAt());
         List<ImpactedObject> impacted = graph.findImpacted(alert.sensorId());
         log.info("Handling alert {} (sensor {}, {}): {} readings/1h, {} impacted objects",
                 alert.alertId(), alert.sensorId(), alert.metricType(), history.count(), impacted.size());
@@ -70,7 +86,7 @@ public class AlertConsumer {
         IncidentPlan plan = planner.plan(alert, history, impacted);
 
         Incident incident = new Incident(
-                "i-" + UUID.randomUUID().toString().substring(0, 8),
+                "i-" + UUID.randomUUID(),
                 alert.alertId(),
                 alert.sensorId(),
                 alert.metricType(),
@@ -82,10 +98,6 @@ public class AlertConsumer {
 
         int stored = incidents.save(incident);
         if (stored == 0) {
-            // ON CONFLICT (alert_id) DO NOTHING swallowed the row: a redelivery slipped past the
-            // existsByAlertId check above while this one was in the Claude call. The incident is
-            // safe (the winning delivery wrote it), but the plan we just paid for was discarded —
-            // which must not be logged as a successful persist.
             log.warn("Alert {} was already persisted by a concurrent delivery — discarding the plan "
                     + "produced for it", alert.alertId());
             return;
@@ -99,9 +111,6 @@ public class AlertConsumer {
         try {
             alert = objectMapper.readValue(payload, Alert.class);
         } catch (JacksonException e) {
-            // Only Jackson's own failures mean "the detector sent us garbage". Jackson 3 exceptions
-            // are all unchecked, so catching RuntimeException here would also swallow our own bugs
-            // and dead-letter a perfectly good alert under a misleading "malformed JSON" label.
             throw new InvalidAlertException("Malformed alert JSON", payload, e);
         }
         if (isBlank(alert.alertId())) {
@@ -110,10 +119,12 @@ public class AlertConsumer {
         if (isBlank(alert.sensorId())) {
             throw new InvalidAlertException("Missing 'sensor_id'", payload);
         }
+        if (alert.detectedAt() == null) {
+            throw new InvalidAlertException("Missing 'detected_at'", payload);
+        }
         return alert;
     }
 
-    /** Serialises a list to JSON for a {@code jsonb} column; a null list becomes {@code []}. */
     private String toJson(List<String> list) {
         return objectMapper.writeValueAsString(list == null ? List.of() : list);
     }

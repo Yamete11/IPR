@@ -52,3 +52,18 @@ dependencies {
 tasks.withType<Test> {
 	useJUnitPlatform()
 }
+
+// The storage benchmark loads millions of rows twice and times the data lifecycle: keep it out of `build`.
+tasks.test {
+	useJUnitPlatform { excludeTags("benchmark") }
+}
+
+val timeseriesBenchmark by tasks.registering(Test::class) {
+	description = "Plain B-tree table vs. hypertable: chunks, CA vs MV, compression, tiering, retention (needs Docker)."
+	group = "verification"
+	testClassesDirs = sourceSets.test.get().output.classesDirs
+	classpath = sourceSets.test.get().runtimeClasspath
+	useJUnitPlatform { includeTags("benchmark") }
+	outputs.upToDateWhen { false }
+	testLogging { showStandardStreams = true }
+}

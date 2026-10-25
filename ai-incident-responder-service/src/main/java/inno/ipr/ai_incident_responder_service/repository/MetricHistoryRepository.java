@@ -6,26 +6,30 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
+import java.time.Instant;
 
 /**
  * Read side over the {@code metrics} hypertable (written by ingestion-service) — the last hour of a
  * sensor's readings, aggregated into a {@link MetricSummary}. Uses the <em>TimescaleDB</em>
  * {@code JdbcTemplate}. Aggregating in SQL keeps the payload tiny regardless of the ingestion rate.
+ *
+ * <p>{@code SUMMARY} returns one summary row for <em>this metric</em> over the hour ending at
+ * {@code until} — the alert's {@code detected_at}, not {@code now()}. Anchoring on the alert keeps
+ * the breach inside the window however late the alert is processed: retries through a Claude
+ * outage, consumer lag or a replay from {@code earliest} would otherwise hand Claude "no readings"
+ * or the post-recovery data and understate the criticality.
+ * {@code array_agg(... ORDER BY timestamp DESC)[1]} is the most recent value;
+ * {@code max(timestamp)} its instant. All aggregates are {@code NULL} when there are no readings in
+ * the window (count 0).
+ *
+ * <p>The {@code metric_type} filter is not optional. The hypertable is keyed on
+ * {@code (timestamp, sensor_id, metric_type)} and the telemetry contract lets one sensor report
+ * several metrics; without the filter a min/max/avg would blend, say, pipe pressure with cable
+ * temperature and hand Claude a summary that describes no real quantity at all.
  */
 @Repository
 public class MetricHistoryRepository {
 
-    /**
-     * One summary row for the sensor's last hour of <em>this metric</em>.
-     * {@code array_agg(... ORDER BY timestamp DESC)[1]} is the most recent value;
-     * {@code max(timestamp)} its instant. All aggregates are {@code NULL} when there are no readings
-     * in the window (count 0).
-     *
-     * <p>The {@code metric_type} filter is not optional. The hypertable is keyed on
-     * {@code (timestamp, sensor_id, metric_type)} and the telemetry contract lets one sensor report
-     * several metrics; without the filter a min/max/avg would blend, say, pipe pressure with cable
-     * temperature and hand Claude a summary that describes no real quantity at all.
-     */
     private static final String SUMMARY = """
             SELECT count(*)                                            AS cnt,
                    min(value)                                          AS mn,
@@ -36,7 +40,8 @@ public class MetricHistoryRepository {
             FROM metrics
             WHERE sensor_id = ?
               AND metric_type = ?
-              AND "timestamp" >= now() - INTERVAL '1 hour'
+              AND "timestamp" >  ?::timestamptz - INTERVAL '1 hour'
+              AND "timestamp" <= ?::timestamptz
             """;
 
     private final JdbcTemplate jdbc;
@@ -45,7 +50,8 @@ public class MetricHistoryRepository {
         this.jdbc = jdbc;
     }
 
-    public MetricSummary findLastHour(String sensorId, String metricType) {
+    public MetricSummary findLastHour(String sensorId, String metricType, Instant until) {
+        Timestamp end = Timestamp.from(until);
         return jdbc.queryForObject(SUMMARY, (rs, rowNum) -> {
             Timestamp latestAt = rs.getTimestamp("latest_at");
             return new MetricSummary(
@@ -55,6 +61,6 @@ public class MetricHistoryRepository {
                     rs.getObject("av", Double.class),
                     rs.getObject("latest", Double.class),
                     latestAt == null ? null : latestAt.toInstant());
-        }, sensorId, metricType);
+        }, sensorId, metricType, end, end);
     }
 }

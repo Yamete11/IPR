@@ -11,11 +11,13 @@ import java.util.List;
  * + impacted graph objects). Two implementations, selected by {@code ai.claude.mock}:
  * {@link ClaudeIncidentPlanner} (real Claude API call, the default) and {@link MockIncidentPlanner}
  * (offline canned plan, no API key / no billed call — for local end-to-end runs).
+ *
+ * <p>{@link #model()} returns the model id that produced the plan — recorded on the incident row
+ * for provenance.
  */
 public interface IncidentPlanner {
 
     IncidentPlan plan(Alert alert, MetricSummary history, List<ImpactedObject> impacted);
 
-    /** The model id that produced the plan — recorded on the incident row for provenance. */
     String model();
 }

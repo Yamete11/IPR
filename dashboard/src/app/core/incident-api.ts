@@ -36,7 +36,7 @@ export class IncidentApi {
     return this.gql
       .query<{ incidents: Incident[] }>(
         INCIDENTS_ENDPOINT,
-        `query($limit: Int) { incidents(limit: $limit) { ${INCIDENT_FIELDS} } }`,
+        `query($limit: Int!) { incidents(limit: $limit) { ${INCIDENT_FIELDS} } }`,
         { limit },
       )
       .pipe(map((d) => d.incidents));
@@ -56,7 +56,7 @@ export class IncidentApi {
     return this.gql
       .query<{ incidentsBySensor: Incident[] }>(
         INCIDENTS_ENDPOINT,
-        `query($sensorId: ID!, $limit: Int) {
+        `query($sensorId: ID!, $limit: Int!) {
           incidentsBySensor(sensorId: $sensorId, limit: $limit) { ${INCIDENT_FIELDS} } }`,
         { sensorId, limit },
       )
@@ -68,7 +68,7 @@ export class IncidentApi {
     return this.gql
       .query<{ recentMetrics: Metric[] }>(
         INCIDENTS_ENDPOINT,
-        `query($sensorId: ID!, $limit: Int) {
+        `query($sensorId: ID!, $limit: Int!) {
           recentMetrics(sensorId: $sensorId, limit: $limit) { timestamp sensorId metricType value status } }`,
         { sensorId, limit },
       )

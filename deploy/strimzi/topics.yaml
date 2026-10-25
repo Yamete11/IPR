@@ -2,7 +2,8 @@
 # must be DNS-1123, so the `.DLQ` topics carry their real Kafka name in spec.topicName.
 #
 # city-telemetry has 6 partitions: that is the ceiling for the ingestion-service consumer group
-# (KEDA scales it up to 6 replicas). The services' own NewTopic beans become no-ops because the
+# (KEDA scales it up to 6 replicas). Its DLQ matches it, so a dead-lettered record always has a
+# partition to land on (the recoverers also let the producer pick one). The services' own NewTopic beans become no-ops because the
 # topics already exist, and never shrink them.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
@@ -26,7 +27,7 @@ metadata:
     strimzi.io/cluster: smartcity
 spec:
   topicName: city-telemetry.DLQ
-  partitions: 3
+  partitions: 6
   replicas: 1
 ---
 apiVersion: kafka.strimzi.io/v1

@@ -7,21 +7,50 @@ import inno.ipr.ai_incident_responder_service.domain.MetricSummary;
 import java.util.List;
 
 /**
- * Assembles the lightweight-RAG prompt for the Claude call: the crew's role, the raw alert, a
- * one-hour metric summary, and the dependency-graph objects the failure impacts. Kept compact so
- * it stays well within token limits regardless of ingestion volume — the history is a fixed-size
- * summary, never the raw series. Pure and stateless so the exact text can be asserted in tests.
+ * Assembles the lightweight-RAG prompt for the Claude call. The prompt is split in two:
+ * {@link #SYSTEM_PROMPT} — the fixed role and rules, identical on every request — and
+ * {@link #build} — the per-alert user message with the raw alert, a one-hour metric summary, and
+ * the dependency-graph objects the failure impacts.
+ *
+ * <p>The user message is bounded so it stays well within token limits regardless of ingestion
+ * volume or graph size: the history is a fixed-size summary, never the raw series, and at most
+ * {@link #MAX_IMPACTED_IN_PROMPT} impacted objects are listed (the rest are counted, not dropped
+ * silently). Pure and stateless so the exact text can be asserted in tests.
+ *
+ * <p>{@link #SYSTEM_PROMPT} holds the model's role and output rules. It is sent as the request's
+ * {@code system} parameter rather than inside the user message: it is operator instruction, not
+ * data, and keeping it byte-identical across requests is what would let it be prompt-cached once it
+ * grows past the model's minimum cacheable prefix.
+ *
+ * <p>{@link #MAX_IMPACTED_IN_PROMPT} is 50 because one line is ~15 tokens, so 50 lines keep the
+ * graph section under ~1k tokens even for a substation that feeds the whole city; beyond that the
+ * plan does not improve, it only costs more and dilutes the context.
  */
 public final class IncidentPromptBuilder {
+
+    public static final String SYSTEM_PROMPT = """
+            You are the incident-response coordinator for a Smart City infrastructure network \
+            (power substations, distribution nodes, residential buildings and their sensors). \
+            For each monitoring alert you receive, produce a structured remediation plan for the \
+            field repair crew.
+
+            Rules:
+            - Base the plan only on the alert, the metric history and the dependency graph given \
+            in the message; do not invent objects that are not listed.
+            - Criticality is exactly one of HIGH, MEDIUM or LOW. Rate higher when residential \
+            buildings lose service or the latest reading is still outside the safe range.
+            - The summary is one sentence for the operator dashboard.
+            - Remediation steps are ordered, concrete actions a crew can carry out, starting with \
+            making the site safe.""";
+
+    static final int MAX_IMPACTED_IN_PROMPT = 50;
 
     private IncidentPromptBuilder() {
     }
 
     public static String build(Alert alert, MetricSummary history, List<ImpactedObject> impacted) {
         StringBuilder sb = new StringBuilder();
-        sb.append("You are the incident-response coordinator for a Smart City infrastructure network. ")
-                .append("A monitoring rule has fired. Using the context below, produce a structured ")
-                .append("remediation plan for the field repair crew.\n\n");
+        sb.append("A monitoring rule has fired. Produce the remediation plan from the context below.\n\n");
 
         sb.append("## Alert\n")
                 .append("- sensor_id: ").append(alert.sensorId()).append('\n')
@@ -31,7 +60,7 @@ public final class IncidentPromptBuilder {
                 .append("- detected_at: ").append(alert.detectedAt()).append("\n\n");
 
         sb.append("## Last hour of readings for this sensor\n");
-        if (history == null || history.isEmpty()) {
+        if (history.isEmpty()) {
             sb.append("- no readings recorded in the last hour\n");
         } else {
             sb.append("- count: ").append(history.count()).append('\n')
@@ -44,16 +73,21 @@ public final class IncidentPromptBuilder {
         sb.append('\n');
 
         sb.append("## Impacted objects (from the network dependency graph)\n");
-        if (impacted == null || impacted.isEmpty()) {
+        if (impacted.isEmpty()) {
             sb.append("- none resolved (sensor not linked in the topology graph)\n");
         } else {
-            for (ImpactedObject o : impacted) {
+            for (ImpactedObject o : impacted.subList(0, Math.min(impacted.size(), MAX_IMPACTED_IN_PROMPT))) {
                 Object name = o.properties() == null ? null : o.properties().get("name");
                 sb.append("- ").append(o.label()).append(' ').append(o.id());
                 if (name != null) {
                     sb.append(" (").append(name).append(')');
                 }
                 sb.append('\n');
+            }
+            if (impacted.size() > MAX_IMPACTED_IN_PROMPT) {
+                sb.append("- ... and ").append(impacted.size() - MAX_IMPACTED_IN_PROMPT)
+                        .append(" more downstream objects (").append(impacted.size())
+                        .append(" in total; list truncated to fit the prompt)\n");
             }
         }
         sb.append('\n');

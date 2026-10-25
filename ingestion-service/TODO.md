@@ -132,6 +132,11 @@ used across topology-service.
   `(sensor_id, metric_type, timestamp DESC)` index, columnar compression segmented by series, a
   7-day compression policy and a 30-day retention policy; asserted by
   `SchemaInitializationIntegrationTest` against the real image.
+- ~~Storage benchmark / learning-topic demo~~ → done (2026-10-25): `TimeseriesStorageBenchmarkTest`
+  (`@Tag("benchmark")`, run by `./gradlew timeseriesBenchmark`, excluded from `build`) compares a plain
+  B-tree table with the hypertable and walks the lifecycle: chunk exclusion, CA vs MV, hash space
+  partitioning, compression (26.9×), `move_chunk` tiering to a `history` tablespace, `drop_chunks` vs
+  `DELETE`. Write-up: `docs/timeseries-storage.md`.
 - ~~Batch listener + `jdbcTemplate.batchUpdate`~~ → done (2026-09-06): `spring.kafka.listener.type: batch`,
   `MetricRepository.saveAll` (JDBC batch + `reWriteBatchedInserts=true`), per-record poison isolation via
   `BatchListenerFailedException` in `TelemetryConsumer`; covered by `KafkaErrorHandlingIntegrationTest`.

@@ -7,7 +7,9 @@ structured remediation plan that a repair crew can follow.
 Design documents (source of truth): [`project_architecture_and_plan.md`](project_architecture_and_plan.md)
 (4-stage plan, Russian), [`docs/microservices.md`](docs/microservices.md) (service contracts and message
 schemas), [`technology_stack_topics.md`](technology_stack_topics.md) (theory behind the stack), and the
-Mermaid diagrams in [`docs/`](docs/).
+Mermaid diagrams in [`docs/`](docs/). End-to-end walkthrough of the running system — flow, Kafka
+topics/producers/consumers, error handling and delivery guarantees (Russian):
+[`docs/system-overview.md`](docs/system-overview.md).
 
 ## Data flow
 

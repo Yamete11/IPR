@@ -16,26 +16,28 @@ import java.util.Optional;
 
 /**
  * Read side of the {@code city_topology} AGE graph (owned/seeded by topology-service). Answers the
- * "what does this failing sensor take down?" question that enriches an alert:
- *
- * <ol>
- *   <li>{@link #findMonitoredAsset(String)} — the infrastructure vertex the sensor is attached to
- *       (via a {@code SensorLink} edge);</li>
- *   <li>{@link #findDependents(String)} — everything downstream of that asset along the service
- *       network, reusing topology-service's untyped-walk + {@code Sensor}-filter idiom.</li>
- * </ol>
- *
- * <p>{@link #findImpacted(String)} combines them: the asset plus its dependents. Uses the
+ * "what does this failing sensor take down?" question that enriches an alert. Uses the
  * <em>age-db</em> {@code JdbcTemplate} (its Hikari {@code connection-init-sql} puts
  * {@code ag_catalog} on the search_path). The {@code id} is bound as an agtype parameter map
  * ({@code ?::agtype}, {@link Types#OTHER}) — never string-interpolated.
+ *
+ * <p>{@link #findImpacted(String)} returns the asset the sensor monitors plus everything downstream
+ * that loses service if it fails, and is empty when the sensor is not in the graph
+ * (unknown/synthetic sensor).
+ *
+ * <p>{@code findMonitoredAsset(String)} returns the infrastructure vertex reached from the sensor's
+ * outgoing {@code SensorLink} edge.
+ *
+ * <p>{@code findDependents(String)} returns everything downstream of the asset along
+ * PowerLine/Pipeline reachability, reusing topology-service's untyped-walk + {@code Sensor}-filter
+ * idiom, with the walk depth bounded by {@code MAX_DEPTH} (10 — the city topology is shallow, see
+ * topology-service).
  */
 @Repository
 public class GraphRepository {
 
     private static final String GRAPH = "city_topology";
 
-    /** Upper bound on the dependency walk depth; the city topology is shallow (see topology-service). */
     private static final int MAX_DEPTH = 10;
 
     private final JdbcTemplate jdbc;
@@ -50,10 +52,6 @@ public class GraphRepository {
         this.objectMapper = objectMapper;
     }
 
-    /**
-     * The asset the sensor monitors, plus everything downstream that loses service if it fails.
-     * Empty when the sensor is not in the graph (unknown/synthetic sensor).
-     */
     public List<ImpactedObject> findImpacted(String sensorId) {
         Optional<ImpactedObject> asset = findMonitoredAsset(sensorId);
         if (asset.isEmpty()) {
@@ -65,8 +63,7 @@ public class GraphRepository {
         return impacted;
     }
 
-    /** The infrastructure vertex reached from the sensor's outgoing {@code SensorLink}. */
-    public Optional<ImpactedObject> findMonitoredAsset(String sensorId) {
+    private Optional<ImpactedObject> findMonitoredAsset(String sensorId) {
         String sql = """
                 SELECT * FROM cypher('%s', $$
                     MATCH (s:Sensor {id: $id})-[:SensorLink]->(a)
@@ -76,8 +73,7 @@ public class GraphRepository {
         return queryById(sql, sensorId).stream().findFirst();
     }
 
-    /** Everything downstream of {@code assetId} along PowerLine/Pipeline reachability. */
-    public List<ImpactedObject> findDependents(String assetId) {
+    private List<ImpactedObject> findDependents(String assetId) {
         String sql = """
                 SELECT * FROM cypher('%s', $$
                     MATCH (n {id: $id})-[*1..%d]->(d)

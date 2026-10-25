@@ -174,9 +174,16 @@ Chart-only changes: `.\deploy\scripts\up.ps1 -SkipCluster -SkipImages`.
 First real run on 2026-10-25 (kind v0.32 / Kubernetes 1.36, Strimzi 1.3 / Kafka 4.3.1, KEDA,
 Helm 4.2): cluster, Kafka and all four topics Ready, KEDA installed, all 7 images built and loaded,
 Helm release installed, every service pod Running/Ready after the two fixes listed under Notes.
-Not yet verified: all pods healthy at once, the `demo-hpa` scale-out, incidents produced in the
-cluster, and the dashboard via port-forward; the run was cut short by memory pressure from another
-compose stack sharing the Docker VM. Resume with `up.ps1 -SkipImages` and `demo-hpa.ps1`.
+Later the same day, with the other compose stack stopped, all 11 pods were Running/Ready together.
+The `demo-hpa` run scaled ingestion-service from 1 to 6 replicas in under a minute, and back to 1 about
+5 minutes after the load stopped (HPA scale-down stabilization of 300 s). The optional StorageClass
+and static PV demo (`smartcity-infra.storage.*`) bound as expected. Measurements and the theory
+behind them: `docs/k8s-storage-and-scaling.md`. Not yet verified: incidents produced in the cluster
+and the dashboard via port-forward.
+
+If an interrupted install leaves the release in `pending-install`, `helm upgrade` refuses to run
+("another operation is in progress"). Once the resources exist, either `down` + `up`, or set the
+`status` in the `sh.helm.release.v1.smartcity.v1` Secret to `deployed`.
 
 ## Notes and limits
 
@@ -185,7 +192,10 @@ compose stack sharing the Docker VM. Resume with `up.ps1 -SkipImages` and `demo-
 - KEDA cannot usefully exceed 6 ingestion replicas: that is the partition count of
   `city-telemetry`. Change both together.
 - The databases keep their data in PersistentVolumeClaims on Kind's default storage class; they
-  disappear with the cluster.
+  disappear with the cluster. `smartcity-infra.storage.createClass=true` adds a `smartcity-retain`
+  class (Retain, WaitForFirstConsumer), and `storage.className` points the StatefulSets at it. That only
+  works on a fresh install: `volumeClaimTemplates` are immutable. `storage.staticPvDemo.enabled=true`
+  adds a hand-made hostPath PV and a PVC bound to it by name.
 - TimescaleDB's image runs `timescaledb-tune` on first boot, which sizes `max_connections` from the
   memory limit (25 at 2Gi), too few for every service's Hikari pool plus a scaled-out ingestion.
   The StatefulSet overrides it on the command line (`smartcity-infra` value

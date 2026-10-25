@@ -46,7 +46,7 @@ class AlertConsumerTest {
     @BeforeEach
     void setUp() {
         consumer = new AlertConsumer(JsonMapper.builder().build(), incidents, metrics, graph, planner);
-        given(metrics.findLastHour(anyString(), anyString()))
+        given(metrics.findLastHour(anyString(), anyString(), any()))
                 .willReturn(new MetricSummary(60, 0.0, 4.2, 3.0, 0.0, Instant.parse("2026-09-06T10:04:55Z")));
         given(graph.findImpacted("s-00042")).willReturn(List.of(
                 new ImpactedObject("node-5", "DistributionNode", Map.of("name", "North")),
@@ -63,7 +63,7 @@ class AlertConsumerTest {
     void happyPath() {
         consumer.onMessage(VALID);
 
-        verify(metrics).findLastHour("s-00042", "pipe_pressure");
+        verify(metrics).findLastHour("s-00042", "pipe_pressure", Instant.parse("2026-09-06T10:05:00Z"));
         verify(graph).findImpacted("s-00042");
         ArgumentCaptor<Incident> saved = ArgumentCaptor.forClass(Incident.class);
         verify(incidents).save(saved.capture());
@@ -134,6 +134,18 @@ class AlertConsumerTest {
         assertThatThrownBy(() -> consumer.onMessage(blankSensor))
                 .isInstanceOf(InvalidAlertException.class)
                 .hasMessageContaining("sensor_id");
+        verifyNoInteractions(incidents, planner);
+    }
+
+    @Test
+    @DisplayName("an alert without detected_at is poison: it anchors the metric-history window")
+    void missingDetectedAtIsPoison() {
+        String noDetectedAt = "{\"alert_id\":\"a-1\",\"sensor_id\":\"s-00042\",\"metric_type\":\"pipe_pressure\","
+                + "\"value\":0.0,\"rule\":\"r\"}";
+
+        assertThatThrownBy(() -> consumer.onMessage(noDetectedAt))
+                .isInstanceOf(InvalidAlertException.class)
+                .hasMessageContaining("detected_at");
         verifyNoInteractions(incidents, planner);
     }
 

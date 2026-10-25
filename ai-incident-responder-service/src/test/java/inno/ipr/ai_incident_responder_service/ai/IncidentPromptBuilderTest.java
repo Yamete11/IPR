@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -17,6 +18,7 @@ class IncidentPromptBuilderTest {
 
     private static final Alert ALERT = new Alert("a-1001", "s-00042", "pipe_pressure", 0.0,
             Instant.parse("2026-09-06T10:05:00Z"), "pipe_pressure_min<0.5");
+    private static final MetricSummary NO_HISTORY = new MetricSummary(0, null, null, null, null, null);
 
     @Test
     @DisplayName("includes the alert, the hour summary and every impacted object with its name")
@@ -30,7 +32,8 @@ class IncidentPromptBuilderTest {
         String prompt = IncidentPromptBuilder.build(ALERT, history, impacted);
 
         assertThat(prompt)
-                .startsWith("You are the incident-response coordinator")
+                .startsWith("A monitoring rule has fired.")
+                .doesNotContain("You are the incident-response coordinator")
                 .contains("- sensor_id: s-00042")
                 .contains("- metric_type: pipe_pressure")
                 .contains("- value: 0.0")
@@ -47,7 +50,7 @@ class IncidentPromptBuilderTest {
     @Test
     @DisplayName("says so explicitly when there is no history and nothing in the graph")
     void emptyContext() {
-        String prompt = IncidentPromptBuilder.build(ALERT, new MetricSummary(0, null, null, null, null, null), List.of());
+        String prompt = IncidentPromptBuilder.build(ALERT, NO_HISTORY, List.of());
 
         assertThat(prompt)
                 .contains("- no readings recorded in the last hour")
@@ -56,12 +59,25 @@ class IncidentPromptBuilderTest {
     }
 
     @Test
-    @DisplayName("null history and null impacted list are treated as empty, not as errors")
-    void nullsAreEmpty() {
-        String prompt = IncidentPromptBuilder.build(ALERT, null, null);
+    @DisplayName("lists at most MAX_IMPACTED_IN_PROMPT objects and counts the rest instead of dropping them silently")
+    void impactedListIsCapped() {
+        List<ImpactedObject> impacted = IntStream.range(0, 120)
+                .mapToObj(i -> new ImpactedObject("bld-" + i, "ResidentialBuilding", Map.of()))
+                .toList();
+
+        String prompt = IncidentPromptBuilder.build(ALERT, NO_HISTORY, impacted);
 
         assertThat(prompt)
-                .contains("- no readings recorded in the last hour")
-                .contains("- none resolved");
+                .contains("- ResidentialBuilding bld-49\n")
+                .doesNotContain("bld-50\n")
+                .contains("- ... and 70 more downstream objects (120 in total; list truncated to fit the prompt)");
+    }
+
+    @Test
+    @DisplayName("the role lives in the system prompt, not in the per-alert message")
+    void systemPromptHoldsTheRole() {
+        assertThat(IncidentPromptBuilder.SYSTEM_PROMPT)
+                .startsWith("You are the incident-response coordinator")
+                .contains("exactly one of HIGH, MEDIUM or LOW");
     }
 }

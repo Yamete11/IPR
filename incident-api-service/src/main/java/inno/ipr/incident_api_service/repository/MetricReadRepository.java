@@ -5,13 +5,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
-import java.sql.Timestamp;
 import java.util.List;
 
 /**
- * Read side of the {@code metrics} hypertable (TimescaleDB) — recent raw readings for a sensor, for
- * the dashboard's charts. Read-only (ingestion-service is the sole writer). Instance
- * {@link JdbcTemplate}, no writes.
+ * Read side of the {@code metrics} hypertable (TimescaleDB): recent raw readings for a sensor, for
+ * the dashboard's charts. ingestion-service is its sole writer.
  */
 @Repository
 public class MetricReadRepository {
@@ -24,15 +22,12 @@ public class MetricReadRepository {
             LIMIT ?
             """;
 
-    private static final RowMapper<MetricDto> ROW_MAPPER = (rs, rowNum) -> {
-        Timestamp ts = rs.getTimestamp("timestamp");
-        return new MetricDto(
-                ts == null ? null : ts.toInstant().toString(),
-                rs.getString("sensor_id"),
-                rs.getString("metric_type"),
-                rs.getDouble("value"),
-                rs.getString("status"));
-    };
+    private static final RowMapper<MetricDto> ROW_MAPPER = (rs, rowNum) -> new MetricDto(
+            rs.getTimestamp("timestamp").toInstant().toString(),
+            rs.getString("sensor_id"),
+            rs.getString("metric_type"),
+            rs.getDouble("value"),
+            rs.getString("status"));
 
     private final JdbcTemplate jdbc;
 

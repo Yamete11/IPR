@@ -33,5 +33,8 @@ class ClaudeIncidentPlannerTest {
         OutputConfig output = raw.outputConfig().orElseThrow();
         assertThat(output.effort()).contains(OutputConfig.Effort.HIGH);
         assertThat(output.format()).as("IncidentPlan JSON schema").isPresent();
+        assertThat(raw.system()).hasValueSatisfying(system ->
+                assertThat(system.asString()).isEqualTo(IncidentPromptBuilder.SYSTEM_PROMPT));
+        assertThat(raw.messages()).as("stateless: one user message, no history").hasSize(1);
     }
 }

@@ -14,26 +14,26 @@ import java.time.Duration;
 import java.time.Instant;
 
 /**
- * Owns the deferred 5-minute continuous aggregate that ingestion-service left out. Creates
- * {@code metrics_5m_avg} on startup — a {@code time_bucket}'d rollup of the {@code metrics}
- * hypertable carrying avg/min/max/count per {@code (sensor_id, metric_type)} — plus a refresh
- * policy. Depends on the hypertable already existing (ingestion-service creates it).
+ * Creates the {@code metrics_5m_avg} continuous aggregate (avg/min/max/count per series per 5-minute
+ * bucket) and its refresh policy on startup, over the {@code metrics} hypertable that
+ * ingestion-service owns. Gated by {@code anomaly.schema.init-enabled} so tests without a database
+ * switch it off.
  *
- * <p>That dependency is a start-order hazard in both compose and Kubernetes: nothing guarantees
- * ingestion-service has run its schema script before this runner fires, and
- * {@code CREATE MATERIALIZED VIEW ... FROM metrics} against a missing table fails the context and
- * crash-loops the pod. So the runner first {@linkplain #awaitHypertable() waits} for the hypertable
- * to appear, up to {@code anomaly.schema.wait-timeout}, polling every
- * {@code anomaly.schema.wait-poll}. Only a genuine misconfiguration (ingestion never starts) turns
- * into a failure, and then a loud one.
+ * <p>The DDL runs through {@link JdbcTemplate#execute(String)} on an autocommit connection rather
+ * than {@code spring.sql.init}, because a continuous aggregate cannot be created inside a transaction
+ * block. Every statement is idempotent, so a restart is a no-op.
  *
- * <p>The DDL runs via {@link JdbcTemplate#execute(String)} rather than {@code spring.sql.init}
- * because {@code CREATE MATERIALIZED VIEW ... WITH (timescaledb.continuous)} cannot execute inside
- * a transaction block, and the script initializer may wrap statements in one. JdbcTemplate runs
- * each statement on an autocommit connection, which TimescaleDB accepts. Every statement is
- * idempotent ({@code IF NOT EXISTS} / {@code if_not_exists => TRUE}), so re-running the app is a
- * no-op. Mirrors topology-service's {@code SeedLoader}: an {@link ApplicationRunner} gated by a
- * property so tests (with no live DB) can switch it off.
+ * <p>{@code CREATE_VIEW} keeps min/max because detection reads them: one fault reading averaged over
+ * hundreds of healthy ones would never cross an avg threshold.
+ *
+ * <p>{@code ENABLE_REALTIME} turns real-time aggregation on. TimescaleDB 2.13+ defaults
+ * {@code materialized_only} to true, so a fresh {@code WITH NO DATA} view would return nothing until
+ * its first refresh. Kept alongside the {@code CREATE} option so a view from an older build converges.
+ *
+ * <p>{@link #awaitHypertable()} blocks until {@code HYPERTABLE_PRESENT} finds the hypertable, polling
+ * every {@code anomaly.schema.wait-poll} for up to {@code anomaly.schema.wait-timeout}. Nothing
+ * orders this service after ingestion in compose or Kubernetes, and creating the view over a missing
+ * table would crash-loop the pod. An unreachable database counts as "not there yet".
  */
 @Component
 @ConditionalOnProperty(name = "anomaly.schema.init-enabled", havingValue = "true", matchIfMissing = true)
@@ -41,10 +41,6 @@ public class ContinuousAggregateInitializer implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(ContinuousAggregateInitializer.class);
 
-    /**
-     * Detection reads min/max (a single fault reading averaged over hundreds of OK readings would
-     * never cross an avg threshold), so the aggregate materialises the boundary values too.
-     */
     private static final String CREATE_VIEW = """
             CREATE MATERIALIZED VIEW IF NOT EXISTS metrics_5m_avg
             WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
@@ -60,14 +56,6 @@ public class ContinuousAggregateInitializer implements ApplicationRunner {
             WITH NO DATA
             """;
 
-    /**
-     * Force real-time aggregation on. Modern TimescaleDB (2.13+) defaults
-     * {@code materialized_only} to <em>true</em>, so a fresh continuous aggregate created
-     * {@code WITH NO DATA} would return nothing until its refresh policy first runs. Setting it
-     * false makes queries union the materialised buckets with the recent not-yet-materialised rows,
-     * so a just-arrived fault reading is visible immediately. Idempotent, and also converges a view
-     * created by an older build of this initializer.
-     */
     private static final String ENABLE_REALTIME =
             "ALTER MATERIALIZED VIEW metrics_5m_avg SET (timescaledb.materialized_only = false)";
 
@@ -79,7 +67,6 @@ public class ContinuousAggregateInitializer implements ApplicationRunner {
                 if_not_exists     => TRUE)
             """;
 
-    /** A hypertable, specifically — a plain {@code metrics} table would make the view creation fail. */
     private static final String HYPERTABLE_PRESENT =
             "SELECT count(*) FROM timescaledb_information.hypertables WHERE hypertable_name = 'metrics'";
 
@@ -104,10 +91,6 @@ public class ContinuousAggregateInitializer implements ApplicationRunner {
         log.info("Continuous aggregate 'metrics_5m_avg' ready (real-time aggregation on; refresh policy ensured)");
     }
 
-    /**
-     * Blocks until the {@code metrics} hypertable exists, treating an unreachable database the same
-     * way as a missing table (both mean "ingestion has not finished starting yet").
-     */
     private void awaitHypertable() throws InterruptedException {
         Instant deadline = Instant.now().plus(waitTimeout);
         while (true) {

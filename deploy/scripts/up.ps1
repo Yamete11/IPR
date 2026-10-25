@@ -32,6 +32,14 @@ function Step([string]$Label, [scriptblock]$Body) {
     if ($LASTEXITCODE -ne 0) { throw "Step failed: $Label (exit $LASTEXITCODE)" }
 }
 
+# A Step only sees the exit code of its last native command, so a step that runs several wraps each
+# one: a failed `kubectl wait` must not be masked by a later command that succeeds (bash's set -e).
+function Native([scriptblock]$Command) {
+    $global:LASTEXITCODE = 0
+    & $Command
+    if ($LASTEXITCODE -ne 0) { throw "Command failed (exit $LASTEXITCODE): $Command" }
+}
+
 # .env is the single source for credentials locally (compose) and here (Secrets).
 $DotEnv = @{}
 $EnvFile = Join-Path $Root ".env"
@@ -77,16 +85,16 @@ Step "Strimzi operator" {
 }
 
 Step "Kafka cluster (KRaft, single node) + topics" {
-    kubectl apply -f deploy/strimzi/kafka.yaml
-    kubectl wait kafka/smartcity --namespace $Namespace --for=condition=Ready --timeout=15m
-    kubectl apply -f deploy/strimzi/topics.yaml
-    kubectl wait kafkatopic --all --namespace $Namespace --for=condition=Ready --timeout=5m
+    Native { kubectl apply -f deploy/strimzi/kafka.yaml }
+    Native { kubectl wait kafka/smartcity --namespace $Namespace --for=condition=Ready --timeout=15m }
+    Native { kubectl apply -f deploy/strimzi/topics.yaml }
+    Native { kubectl wait kafkatopic --all --namespace $Namespace --for=condition=Ready --timeout=5m }
 }
 
 Step "KEDA (Kafka-lag autoscaling)" {
-    helm repo add kedacore https://kedacore.github.io/charts --force-update
-    helm repo update kedacore
-    helm upgrade --install keda kedacore/keda --namespace keda --create-namespace --wait --timeout 10m
+    Native { helm repo add kedacore https://kedacore.github.io/charts --force-update }
+    Native { helm repo update kedacore }
+    Native { helm upgrade --install keda kedacore/keda --namespace keda --create-namespace --wait --timeout 10m }
 }
 
 if (-not $SkipImages) {
@@ -96,7 +104,7 @@ if (-not $SkipImages) {
 }
 
 Step "Helm release 'smartcity' (infra + services)" {
-    helm dependency build deploy/charts/smartcity
+    Native { helm dependency build deploy/charts/smartcity }
     $sets = @(
         "--set", "smartcity-infra.postgres.user=$PgUser",
         "--set", "smartcity-infra.postgres.password=$PgPassword",

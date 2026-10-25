@@ -31,17 +31,36 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * serialises concurrent replicas both depend on server behaviour no in-memory database reproduces.
  *
  * <p>Self-skips when Docker is unavailable so {@code ./gradlew build} still passes without it.
+ * {@code IMAGE} matches the image pinned in the repo's {@code docker-compose.yml};
+ * {@code LOCK_KEY} must stay in step with the key in {@code schema.sql}. {@link #setUp()} drops
+ * {@code metrics} so each test starts from a clean slate: the populator's job is to build it from
+ * nothing.
+ *
+ * <p>{@link #dataSource(int)} takes a statement timeout in milliseconds, 0 to wait indefinitely. A
+ * non-zero value turns "blocked on the advisory lock" into a prompt, deterministic error instead of
+ * a hang — Postgres applies {@code statement_timeout} to a waiting {@code pg_advisory_lock()} call.
+ *
+ * <ul>
+ *   <li>{@link #blocksWhileAnotherReplicaHoldsTheLock()}: the deterministic half of the concurrency
+ *       fix. Holding the lock from another session must block the script; without the
+ *       {@code pg_advisory_lock} call it sails straight through and the DDL races instead. The
+ *       failure must name the lock in the statement it died on, so the test cannot pass by some
+ *       unrelated timeout.</li>
+ *   <li>{@link #concurrentInitialisationBothSucceed()}: {@code Future.get()} rethrows whatever the
+ *       thread hit, so a DDL race surfaces as a failure.</li>
+ *   <li>{@link #releasesTheLockAfterwards()}: a session-level lock outlives the script if the
+ *       unlock is ever dropped, and a pooled connection would then carry it back into the pool and
+ *       wedge every later start-up.</li>
+ * </ul>
  */
 @Testcontainers
 @EnabledIf("dockerAvailable")
 class SchemaInitializationIntegrationTest {
 
-    /** Matches the image pinned in the repo's docker-compose.yml. */
     private static final DockerImageName IMAGE = DockerImageName
             .parse("timescale/timescaledb:2.28.3-pg16")
             .asCompatibleSubstituteFor("postgres");
 
-    /** Must stay in step with the key in {@code schema.sql}. */
     private static final long LOCK_KEY = 91024001L;
 
     @Container
@@ -62,7 +81,6 @@ class SchemaInitializationIntegrationTest {
     void setUp() {
         dataSource = dataSource(0);
         jdbc = new JdbcTemplate(dataSource);
-        // Each test starts from a clean slate: the populator's job is to build this from nothing.
         jdbc.execute("DROP TABLE IF EXISTS metrics CASCADE");
     }
 
@@ -71,12 +89,6 @@ class SchemaInitializationIntegrationTest {
         dataSource.close();
     }
 
-    /**
-     * @param statementTimeoutMillis 0 to wait indefinitely. A non-zero value turns "blocked on the
-     *                               advisory lock" into a prompt, deterministic error instead of a
-     *                               hang — Postgres applies {@code statement_timeout} to a waiting
-     *                               {@code pg_advisory_lock()} call.
-     */
     private static HikariDataSource dataSource(int statementTimeoutMillis) {
         HikariDataSource ds = new HikariDataSource();
         ds.setJdbcUrl(POSTGRES.getJdbcUrl());
@@ -181,11 +193,6 @@ class SchemaInitializationIntegrationTest {
                 """, String.class);
     }
 
-    /**
-     * The deterministic half of the concurrency fix. Holding the lock from another session must
-     * block the script; without the {@code pg_advisory_lock} call it sails straight through and the
-     * DDL races instead.
-     */
     @Test
     @DisplayName("the script waits on the advisory lock another replica already holds")
     void blocksWhileAnotherReplicaHoldsTheLock() throws Exception {
@@ -198,9 +205,6 @@ class SchemaInitializationIntegrationTest {
 
             assertThatThrownBy(() -> runSchemaScript(blocked))
                     .as("a second replica must wait rather than race the DDL")
-                    // The statement it died on names the lock, so this cannot pass by some unrelated
-                    // timeout: without the pg_advisory_lock call the script would run straight to
-                    // completion here.
                     .hasMessageContaining("pg_advisory_lock(" + LOCK_KEY + ")")
                     .rootCause()
                     .hasMessageContaining("canceling statement due to statement timeout");
@@ -222,7 +226,6 @@ class SchemaInitializationIntegrationTest {
                     () -> { runSchemaScript(a); return true; },
                     () -> { runSchemaScript(b); return true; }));
 
-            // get() rethrows whatever the thread hit, so a DDL race surfaces here as a failure.
             for (Future<Boolean> result : results) {
                 assertThat(result.get()).isTrue();
             }
@@ -235,10 +238,6 @@ class SchemaInitializationIntegrationTest {
                 Integer.class)).isOne();
     }
 
-    /**
-     * A session-level lock outlives the script if the unlock is ever dropped, and a pooled
-     * connection would then carry it back into the pool and wedge every later start-up.
-     */
     @Test
     @DisplayName("the advisory lock is released when the script finishes")
     void releasesTheLockAfterwards() {

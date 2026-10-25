@@ -28,7 +28,8 @@ topology:
   seed:
     enabled: true
     location: classpath:seed/city-topology.json
-    # After seeding, ensure a GIN index on each label's properties (id lookups become index probes).
+    # After seeding, ensure a GIN index on each vertex label's properties (id lookups become index
+    # probes) and B-tree indexes on each edge type's start_id/end_id (AGE creates none).
     index-enabled: true
 
 # Liveness/readiness probes for Kubernetes plus the Prometheus scrape endpoint. The readiness

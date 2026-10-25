@@ -3,9 +3,8 @@ package inno.ipr.ingestion_service.exception;
 /**
  * Thrown when a {@code city-telemetry} record cannot be turned into a valid
  * {@link inno.ipr.ingestion_service.telemetry.TelemetryMessage} — malformed JSON or a failed
- * field-level check. The raw payload is retained so the error handler can log it before the record
- * is routed to the dead-letter topic ({@code city-telemetry.DLQ}); {@code KafkaConfig}'s recoverer
- * reads it back out of the cause chain via {@code payload()}.
+ * field-level check. The raw payload is not carried here: the error handler logs it straight from
+ * the Kafka record before routing the record to {@code city-telemetry.DLQ}.
  *
  * <p>Unchecked on purpose: it propagates out of the {@code @KafkaListener}, where the container's
  * {@code DefaultErrorHandler} + {@code DeadLetterPublishingRecoverer} take over (see
@@ -14,19 +13,11 @@ package inno.ipr.ingestion_service.exception;
  */
 public class InvalidTelemetryException extends RuntimeException {
 
-    private final String payload;
-
-    public InvalidTelemetryException(String message, String payload) {
+    public InvalidTelemetryException(String message) {
         super(message);
-        this.payload = payload;
     }
 
-    public InvalidTelemetryException(String message, String payload, Throwable cause) {
+    public InvalidTelemetryException(String message, Throwable cause) {
         super(message, cause);
-        this.payload = payload;
-    }
-
-    public String payload() {
-        return payload;
     }
 }

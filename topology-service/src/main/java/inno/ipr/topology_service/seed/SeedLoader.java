@@ -1,8 +1,8 @@
 package inno.ipr.topology_service.seed;
 
 import inno.ipr.topology_service.age.AgeClient;
-import inno.ipr.topology_service.domain.edge.EdgeType;
-import inno.ipr.topology_service.domain.vertex.VertexLabel;
+import inno.ipr.topology_service.domain.EdgeType;
+import inno.ipr.topology_service.domain.VertexLabel;
 import inno.ipr.topology_service.seed.model.SeedGraph;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,35 +14,47 @@ import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.regex.Pattern;
 
 /**
  * Loads {@code seed/city-topology.json} into the AGE graph on startup: creates the graph if
  * needed, then upserts every vertex and edge via {@code MERGE} (keyed by {@code id}), so
  * re-running the app never duplicates data.
  *
- * <p>Properties are applied with a {@code SET n.key = $p_key} clause using <em>scalar</em>
- * parameters. AGE 1.6.0 rejects a map-valued parameter in {@code SET n += $map}
- * ("SET clause expects a map"), so each property is bound individually.
- *
  * <p>Gated by {@code topology.seed.enabled} (default true) so it can be switched off — e.g. in
  * tests, where no AGE instance is available.
  *
- * <p>The graph written to is {@code topology.graph} — the same property the read side
- * ({@code TopologyRepository}) queries. The {@code graph} field in the seed file must agree with
- * it; a mismatch is rejected at startup rather than silently seeding a graph nobody reads.
+ * <p>{@link #run(ApplicationArguments)} reads the seed, checks its graph name, writes vertices, then
+ * edges (so their {@code MATCH} endpoints resolve), logs the resulting counts and finally ensures the
+ * indexes — after the data, because AGE only materialises a label's table on its first write. The
+ * graph written to is {@code topology.graph}, the same property {@code TopologyRepository} reads; a
+ * seed file declaring another graph is rejected, since it would seed fine and then make every query
+ * silently return an empty list.
+ *
+ * <p>{@code seedVertices(String, List)} merges each vertex under its allow-listed {@link VertexLabel}.
+ *
+ * <p>{@code seedEdges(String, List)} merges each edge under its allow-listed {@link EdgeType}. The
+ * statement ends in {@code RETURN r} so the row count tells "written" from "{@code MATCH} found no
+ * endpoint"; without it a typo'd from/to id would be a silent no-op that quietly shrinks every
+ * dependents/dependencies answer.
+ *
+ * <p>{@code ensureIndexes(String)} creates the GIN property index on every vertex label and the
+ * {@code start_id}/{@code end_id} indexes on every edge type, when {@code topology.seed.index-enabled}.
+ *
+ * <p>{@code appendSet(StringBuilder, String, Map, Map)} appends {@code SET var.key = $p_key, ...} and
+ * binds each property as its own <em>scalar</em> parameter: AGE 1.6.0 rejects a map-valued parameter
+ * in {@code SET n += $map} ("SET clause expects a map"). Property names are interpolated as
+ * identifiers, so each is checked with {@link AgeClient#checkIdentifier(String, String)} first.
  */
 @Component
 @ConditionalOnProperty(name = "topology.seed.enabled", havingValue = "true", matchIfMissing = true)
 public class SeedLoader implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(SeedLoader.class);
-
-    /** Property names are interpolated into Cypher as identifiers, so they must be safe ones. */
-    private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
 
     private final AgeClient age;
     private final ObjectMapper objectMapper;
@@ -66,14 +78,8 @@ public class SeedLoader implements ApplicationRunner {
     }
 
     @Override
-    public void run(ApplicationArguments args) throws Exception {
-        SeedGraph seed;
-        try (InputStream in = resourceLoader.getResource(location).getInputStream()) {
-            seed = objectMapper.readValue(in, SeedGraph.class);
-        }
-
-        // The read side queries `topology.graph`; seeding a differently-named graph would succeed
-        // here and then make every query return an empty list, with no error anywhere.
+    public void run(ApplicationArguments args) throws IOException {
+        SeedGraph seed = readSeed();
         String graph = seed.graph();
         if (graph == null || !graph.equals(configuredGraph)) {
             throw new IllegalStateException(
@@ -82,27 +88,45 @@ public class SeedLoader implements ApplicationRunner {
         }
         age.ensureGraph(graph);
 
-        for (SeedGraph.Vertex v : seed.vertices()) {
+        seedVertices(graph, seed.vertices());
+        seedEdges(graph, seed.edges());
+        log.info("Seeded '{}': graph now has {} vertices, {} edges (from {} vertex / {} edge seed entries)",
+                graph,
+                age.count(graph, "MATCH (n) RETURN count(n)"),
+                age.count(graph, "MATCH ()-[r]->() RETURN count(r)"),
+                seed.vertices().size(), seed.edges().size());
+
+        if (indexEnabled) {
+            ensureIndexes(graph);
+        }
+    }
+
+    private SeedGraph readSeed() throws IOException {
+        try (InputStream in = resourceLoader.getResource(location).getInputStream()) {
+            return objectMapper.readValue(in, SeedGraph.class);
+        }
+    }
+
+    private void seedVertices(String graph, List<SeedGraph.Vertex> vertices) {
+        for (SeedGraph.Vertex v : vertices) {
             String label = VertexLabel.fromLabel(v.label()).label();
             Map<String, Object> params = new LinkedHashMap<>();
             params.put("id", v.id());
             StringBuilder cypher = new StringBuilder("MERGE (n:" + label + " {id: $id})");
-            appendSet(cypher, "n", nullSafe(v.properties()), params);
+            appendSet(cypher, "n", v.properties(), params);
             age.execute(graph, cypher.toString(), objectMapper.writeValueAsString(params));
         }
+    }
 
-        // Edges after all vertices exist so the MATCH endpoints resolve.
-        for (SeedGraph.Edge e : seed.edges()) {
+    private void seedEdges(String graph, List<SeedGraph.Edge> edges) {
+        for (SeedGraph.Edge e : edges) {
             String type = EdgeType.fromType(e.type()).type();
             Map<String, Object> params = new LinkedHashMap<>();
             params.put("from", e.from());
             params.put("to", e.to());
             StringBuilder cypher = new StringBuilder(
                     "MATCH (a {id: $from}), (b {id: $to}) MERGE (a)-[r:" + type + "]->(b)");
-            appendSet(cypher, "r", nullSafe(e.properties()), params);
-            // RETURN so the row count distinguishes "edge written" from "MATCH found no endpoint".
-            // Without it a typo'd from/to id is a silent no-op that quietly shrinks every
-            // dependents/dependencies answer for the life of the graph.
+            appendSet(cypher, "r", e.properties(), params);
             cypher.append(" RETURN r");
             int rows = age.execute(graph, cypher.toString(), objectMapper.writeValueAsString(params));
             if (rows == 0) {
@@ -111,50 +135,32 @@ public class SeedLoader implements ApplicationRunner {
                                 + " was not created: no vertex matches one or both endpoint ids.");
             }
         }
-
-        long vertexCount = age.count(graph, "MATCH (n) RETURN count(n)");
-        long edgeCount = age.count(graph, "MATCH ()-[r]->() RETURN count(r)");
-        log.info("Seeded '{}': graph now has {} vertices, {} edges (from {} vertex / {} edge seed entries)",
-                graph, vertexCount, edgeCount, seed.vertices().size(), seed.edges().size());
-
-        // Indexes come after the data: AGE materialises a label's table on the first vertex write,
-        // so there is nothing to index before the seed has run.
-        if (indexEnabled) {
-            for (VertexLabel label : VertexLabel.values()) {
-                age.ensurePropertyIndex(graph, label.label());
-            }
-            for (EdgeType type : EdgeType.values()) {
-                age.ensureEdgeIndexes(graph, type.type());
-            }
-            log.info("Indexes ensured on '{}': properties of {} vertex labels, start_id/end_id of {} edge types",
-                    graph, VertexLabel.values().length, EdgeType.values().length);
-        }
     }
 
-    /** Appends {@code SET var.key = $p_key, ...} for each property and binds the scalar params. */
+    private void ensureIndexes(String graph) {
+        for (VertexLabel label : VertexLabel.values()) {
+            age.ensurePropertyIndex(graph, label.label());
+        }
+        for (EdgeType type : EdgeType.values()) {
+            age.ensureEdgeIndexes(graph, type.type());
+        }
+        log.info("Indexes ensured on '{}': properties of {} vertex labels, start_id/end_id of {} edge types",
+                graph, VertexLabel.values().length, EdgeType.values().length);
+    }
+
     private static void appendSet(StringBuilder cypher, String var,
                                   Map<String, Object> props, Map<String, Object> params) {
-        if (props.isEmpty()) {
+        if (props == null || props.isEmpty()) {
             return;
         }
-        cypher.append(" SET ");
-        boolean first = true;
+        String separator = " SET ";
         for (Map.Entry<String, Object> entry : props.entrySet()) {
             String key = entry.getKey();
-            if (!IDENTIFIER.matcher(key).matches()) {
-                throw new IllegalArgumentException("Illegal property name in seed: " + key);
-            }
+            AgeClient.checkIdentifier("property", key);
             String param = "p_" + key;
-            if (!first) {
-                cypher.append(", ");
-            }
-            cypher.append(var).append('.').append(key).append(" = $").append(param);
+            cypher.append(separator).append(var).append('.').append(key).append(" = $").append(param);
             params.put(param, entry.getValue());
-            first = false;
+            separator = ", ";
         }
-    }
-
-    private static Map<String, Object> nullSafe(Map<String, Object> props) {
-        return props == null ? Map.of() : props;
     }
 }

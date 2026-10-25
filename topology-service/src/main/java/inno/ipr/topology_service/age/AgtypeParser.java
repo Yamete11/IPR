@@ -14,13 +14,29 @@ import java.util.Map;
  * <p>agtype is a JSON superset, so scalars come back quoted (e.g. {@code "sub-1"}) and property
  * bags come back as JSON objects (e.g. {@code {"name": "Central Substation", "voltage_kv": 110}}).
  * Reading them with the shared Jackson {@link ObjectMapper} unwraps string escapes and coerces
- * numbers/booleans to their natural Java types — replacing the ad-hoc quote-stripping that used to
- * live in {@code TopologyQueryService}.
+ * numbers/booleans to their natural Java types.
  *
  * <p>Only the JSON-compatible subset of agtype is handled (strings, numbers, booleans, objects).
  * The seed graph uses nothing else. Entities rendered inline (a {@code nodes(p)} list) carry type
  * annotations such as {@code ::vertex}; {@link #parseVertexList} strips those before reading the
  * JSON. Everything else selects {@code n.id}/{@code label(n)}/{@code properties(n)} individually.
+ *
+ * <p>{@link #parseScalar(String)} unwraps a scalar agtype value to its string form: a quoted agtype
+ * string ({@code "sub-1"}) is unescaped to {@code sub-1}; anything else (an already-bare token) is
+ * returned trimmed, and a {@code null} input yields {@code null}. {@link #parseMap(String)} parses an
+ * agtype map (a {@code properties(n)} result) into a {@code Map<String, Object>}; {@code null} and
+ * the empty object {@code {}} both yield an empty map. {@link #parseLong(String)} parses an agtype
+ * integer (a {@code count(...)}/{@code sum(...)}/{@code length(p)} result).
+ *
+ * <p>{@link #parseVertexList(String)} parses a list of vertices as AGE renders {@code nodes(p)}:
+ * {@code [{"id": 8444..., "label": "Substation", "properties": {...}}::vertex, ...]}, returning one
+ * map per vertex with the keys {@code id} (AGE's internal graphid), {@code label} and
+ * {@code properties}.
+ *
+ * <p>{@code stripTypeAnnotations(String)} removes the agtype annotations ({@code ::vertex},
+ * {@code ::edge}, {@code ::path}, {@code ::numeric}) that follow a value, leaving plain JSON. String
+ * literals are copied verbatim, so a property value that happens to contain {@code "::vertex"} is
+ * left alone.
  */
 @Component
 public class AgtypeParser {
@@ -31,11 +47,6 @@ public class AgtypeParser {
         this.objectMapper = objectMapper;
     }
 
-    /**
-     * Unwraps a scalar agtype value to its string form: a quoted agtype string ({@code "sub-1"})
-     * is unescaped to {@code sub-1}; anything else (an already-bare token) is returned trimmed.
-     * Returns {@code null} for a {@code null} input.
-     */
     public String parseScalar(String raw) {
         if (raw == null) {
             return null;
@@ -51,10 +62,6 @@ public class AgtypeParser {
         return trimmed;
     }
 
-    /**
-     * Parses an agtype map (a {@code properties(n)} result) into a {@code Map<String, Object>}.
-     * {@code null} and the empty object {@code {}} both yield an empty map.
-     */
     @SuppressWarnings("unchecked")
     public Map<String, Object> parseMap(String raw) {
         if (raw == null) {
@@ -71,7 +78,6 @@ public class AgtypeParser {
         }
     }
 
-    /** Parses an agtype integer (a {@code count(...)}/{@code sum(...)}/{@code length(p)} result). */
     public long parseLong(String raw) {
         String value = raw == null ? null : parseScalar(stripTypeAnnotations(raw));
         if (value == null || "null".equals(value)) {
@@ -84,12 +90,6 @@ public class AgtypeParser {
         }
     }
 
-    /**
-     * Parses a list of vertices as AGE renders {@code nodes(p)}:
-     * {@code [{"id": 8444..., "label": "Substation", "properties": {...}}::vertex, ...]}.
-     * Returns one map per vertex with the keys {@code id} (AGE's internal graphid), {@code label}
-     * and {@code properties}.
-     */
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> parseVertexList(String raw) {
         if (raw == null || raw.isBlank()) {
@@ -102,11 +102,6 @@ public class AgtypeParser {
         }
     }
 
-    /**
-     * Removes agtype annotations ({@code ::vertex}, {@code ::edge}, {@code ::path}, {@code ::numeric})
-     * that follow a value, leaving plain JSON. String literals are copied verbatim, so a property value
-     * that happens to contain {@code "::vertex"} is left alone.
-     */
     static String stripTypeAnnotations(String raw) {
         StringBuilder out = new StringBuilder(raw.length());
         boolean inString = false;

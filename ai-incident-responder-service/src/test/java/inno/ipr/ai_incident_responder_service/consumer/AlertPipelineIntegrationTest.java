@@ -42,6 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.atLeast;
@@ -56,14 +57,23 @@ import static org.mockito.Mockito.verify;
  *
  * <p>Mock mode is on so no {@code AnthropicClient} is created; the {@link IncidentPlanner} is then
  * replaced by a Mockito bean so each test can script the planner's behaviour. The two Hikari pools
- * are declared but never opened — nothing here touches a database.
+ * are declared but never opened — nothing here touches a database — so the datasource is kept out
+ * of the readiness group.
+ *
+ * <ul>
+ *   <li>{@code duplicateSkipsThePlanner}: after the idempotency check, the test gives the consumer
+ *       a moment to (wrongly) proceed, then proves it did not.</li>
+ *   <li>{@code openBreakerIsRetriedNotDeadLettered}: the circuit-breaker contract end to end —
+ *       while the breaker is open the alert is retried under back-off rather than dead-lettered,
+ *       and it is persisted once the breaker admits calls.</li>
+ *   <li>{@code pollDlq(String, Duration)} returns the matching DLQ payload, or {@code null} if none
+ *       arrives before the deadline.</li>
+ * </ul>
  */
 @SpringBootTest(properties = {
         "ai.claude.mock=true",
         "spring.sql.init.mode=never",
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
-        "spring.kafka.consumer.auto-offset-reset=earliest",
-        // The pools are never opened here, so keep the datasource out of the readiness group.
         "management.endpoint.health.group.readiness.include=readinessState",
 })
 @EmbeddedKafka(partitions = 1)
@@ -94,7 +104,7 @@ class AlertPipelineIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        given(metrics.findLastHour(anyString(), anyString()))
+        given(metrics.findLastHour(anyString(), anyString(), any()))
                 .willReturn(new MetricSummary(60, 0.0, 4.2, 3.0, 0.0, Instant.now()));
         given(graph.findImpacted(anyString())).willReturn(List.of(
                 new ImpactedObject("node-5", "DistributionNode", Map.of("name", "North")),
@@ -135,7 +145,7 @@ class AlertPipelineIntegrationTest {
         assertThat(incident.model()).isEqualTo("mock");
         assertThat(incident.impactedObjectsJson()).contains("node-5", "bld-12", "bld-19");
         verify(graph).findImpacted("s-00042");
-        verify(metrics).findLastHour("s-00042", "pipe_pressure");
+        verify(metrics).findLastHour(eq("s-00042"), eq("pipe_pressure"), any());
         assertThat(pollDlq(alertId, Duration.ofSeconds(3))).isNull();
     }
 
@@ -173,16 +183,11 @@ class AlertPipelineIntegrationTest {
         send(alert(alertId, "s-00042"));
 
         await().atMost(TIMEOUT).untilAsserted(() -> verify(incidents).existsByAlertId(alertId));
-        // Give the consumer a moment to (wrongly) proceed, then prove it did not.
         assertThat(pollDlq(alertId, Duration.ofSeconds(2))).isNull();
         verify(planner, never()).plan(any(), any(), any());
         verify(incidents, never()).save(any());
     }
 
-    /**
-     * The circuit-breaker contract end to end: while the breaker is open the alert is retried
-     * under back-off rather than dead-lettered, and it is persisted once the breaker admits calls.
-     */
     @Test
     @DisplayName("an open circuit breaker is retried until it closes, never dead-lettered")
     void openBreakerIsRetriedNotDeadLettered() {
@@ -207,8 +212,6 @@ class AlertPipelineIntegrationTest {
                 .isNull();
     }
 
-    // ------------------------------------------------------------------ helpers
-
     private static String alertId() {
         return "a-" + UUID.randomUUID();
     }
@@ -224,7 +227,6 @@ class AlertPipelineIntegrationTest {
         producer.flush();
     }
 
-    /** @return the matching DLQ payload, or {@code null} if none arrives before the deadline. */
     private String pollDlq(String marker, Duration timeout) {
         long deadline = System.nanoTime() + timeout.toNanos();
         while (System.nanoTime() < deadline) {

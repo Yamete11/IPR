@@ -37,6 +37,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Covers what no mock can: AGE's Cypher dialect (aggregation, path binding, {@code nodes(p)}
  * rendering), the agtype ↔ SQL join, and whether the property index is actually used.
  *
+ * <p>{@code impactSummary}: a sensor takes nothing down (same rule as dependents). {@code paths}:
+ * a path through a SensorLink is found, and none against the edge direction.
+ * {@code propertyIndexIsUsed}: the seed graph is tiny, so the planner would rightly prefer a seq
+ * scan; disabling it shows whether the index is <em>usable</em> for AGE's property predicate at all.
+ * The index has a mixed-case name, so EXPLAIN prints it quoted, and AGE compiles the property map in
+ * the pattern to agtype containment ({@code @>}), which GIN supports.
+ *
  * <p>Self-skips when Docker is unavailable so {@code ./gradlew build} still passes without it.
  */
 @Testcontainers
@@ -93,7 +100,6 @@ class TopologyRepositoryIntegrationTest {
         assertThat(substation.byLabel()).containsExactly(
                 new LabelCountDto("DistributionNode", 2), new LabelCountDto("ResidentialBuilding", 3));
 
-        // A sensor takes nothing down (same rule as dependents).
         assertThat(repository.impactSummary("s-00042").totalObjects()).isZero();
     }
 
@@ -108,7 +114,6 @@ class TopologyRepositoryIntegrationTest {
                 .containsExactly("Substation", "DistributionNode", "ResidentialBuilding");
         assertThat(paths.getFirst().nodes().get(2).properties()).containsEntry("apartments", 84);
 
-        // Through a SensorLink, and no path against the edge direction.
         assertThat(repository.findPaths("s-00042", "bld-19", 5)).singleElement()
                 .extracting(PathDto::length).isEqualTo(2);
         assertThat(repository.findPaths("bld-12", "sub-1", 5)).isEmpty();
@@ -130,8 +135,6 @@ class TopologyRepositoryIntegrationTest {
     void propertyIndexIsUsed() {
         List<String> plan = jdbc.execute((ConnectionCallback<List<String>>) conn -> {
             try (var st = conn.createStatement()) {
-                // The seed graph is tiny, so the planner would rightly prefer a seq scan; disabling it
-                // shows whether the index is *usable* for AGE's property predicate at all.
                 st.execute("SET enable_seqscan = off");
                 List<String> lines = new ArrayList<>();
                 try (ResultSet rs = st.executeQuery("EXPLAIN SELECT * FROM cypher('" + GRAPH
@@ -145,9 +148,7 @@ class TopologyRepositoryIntegrationTest {
             }
         });
         String text = String.join("\n", plan);
-        // Mixed-case name, so EXPLAIN prints it quoted.
         assertThat(text).contains("Bitmap Index Scan on \"" + GRAPH + "_DistributionNode_props_gin\"");
-        // AGE compiles the property map in the pattern to agtype containment, which GIN supports.
         assertThat(text).contains("properties @> '{\"id\": \"node-5\"}'::agtype");
     }
 

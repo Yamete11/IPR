@@ -62,12 +62,54 @@ import static org.mockito.Mockito.verify;
  *
  * <p>The datasource is excluded and {@link MetricRepository} mocked: the point here is the error
  * handler's reaction to a repository outcome, and injecting the outcome directly is both faster and
- * far more precise than provoking a real database into failing on cue.
+ * far more precise than provoking a real database into failing on cue. With no datasource there is
+ * no {@code db} health contributor for the readiness group to include, hence the
+ * {@code readiness.include=readinessState} override. {@link TelemetryParser} is spied rather than
+ * mocked, purely to count delivery attempts: a poison record never reaches the repository, so the
+ * parser is the only place a redelivery is observable.
+ *
+ * <p>{@code TIMEOUT} is generous relative to the 1s/2s/4s… back-off, so a slow CI box does not turn
+ * into a failure. {@code FAILURES_EXCEEDING_A_BOUNDED_POLICY} is four consecutive failures — one
+ * more than the initial attempt plus two retries.
+ *
+ * <p>{@link #setUp()} stubs {@code saveAll} to report one stored row per message: a mock returns
+ * {@code null} for {@code int[]}, which the consumer treats as "nothing to report", but the honest
+ * default for a healthy repository is one stored row per message. Each test reads the DLQ with a
+ * fresh consumer group from the beginning; the DLQ accumulates across tests, so assertions match on
+ * a per-test marker rather than on the topic being empty.
+ *
+ * <ul>
+ *   <li>{@link #invalidTelemetryIsNotRetried()}: the payload omits {@code value} — well-formed JSON
+ *       that must not be ingested as 0.0. The actual no-retry claim is the single parser call: one
+ *       delivery, straight to the DLQ. Under a policy that retries everything this is 3, and the
+ *       partition sits blocked for the whole back-off first.</li>
+ *   <li>{@link #poisonRecordInsideABatchDeadLettersAloneAndNeighboursPersistOnce()}: the
+ *       batch-specific obligation. Three records are sent with one flush, so they land in the same
+ *       poll whenever the broker allows it; the middle one is poison. The listener must persist the
+ *       first, dead-letter only the second, and let the third be redelivered. Neither neighbour may
+ *       be dead-lettered, and each must be handed to the repository exactly once across every batch
+ *       it saw — the first is not written again when the redelivery happens.</li>
+ *   <li>{@link #transientDatabaseFailureIsRetriedNotDeadLettered()}: the half that used to lose
+ *       data — a database blip made {@code save} throw, the record exhausted its two retries within
+ *       ~3 seconds and was dead-lettered, valid telemetry gone from the hypertable for good, since
+ *       nothing consumes the DLQ. It injects deliberately more failures than the old fixed policy's
+ *       budget of three attempts; anything less and the test passes against that policy too,
+ *       proving nothing, because the record would have recovered inside the old retry window rather
+ *       than because retries are now unbounded.</li>
+ *   <li>{@link #dataIntegrityViolationIsDeadLettered()}: the counterpart — a row the database will
+ *       never accept is not worth retrying forever, or the partition stalls behind it indefinitely.
+ *       With batching the rejection first arrives for the whole batch; the listener must fall back
+ *       to single-row inserts to pin the blame on one record. Expected: one batch attempt, one
+ *       row-level attempt to locate the culprit, no retries of either.</li>
+ * </ul>
+ *
+ * <p>{@link #awaitDlqRecord(String)} fails the test if no DLQ record carrying the marker arrives
+ * within {@code TIMEOUT}; {@link #pollDlq(String, Duration)} returns the matching DLQ payload, or
+ * {@code null} if none arrives before the deadline.
  */
 @SpringBootTest(properties = {
         "spring.autoconfigure.exclude=org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
         "spring.sql.init.mode=never",
-        // No datasource means no 'db' health contributor for the readiness group to include.
         "management.endpoint.health.group.readiness.include=readinessState",
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
         "spring.kafka.consumer.auto-offset-reset=earliest",
@@ -75,10 +117,8 @@ import static org.mockito.Mockito.verify;
 @EmbeddedKafka(partitions = 1)
 class KafkaErrorHandlingIntegrationTest {
 
-    /** Generous relative to the 1s/2s/4s… back-off, so a slow CI box does not turn into a failure. */
     private static final Duration TIMEOUT = Duration.ofSeconds(60);
 
-    /** Four consecutive failures — one more than the initial attempt plus two retries. */
     private static final int FAILURES_EXCEEDING_A_BOUNDED_POLICY = 4;
 
     @Autowired
@@ -87,10 +127,6 @@ class KafkaErrorHandlingIntegrationTest {
     @MockitoBean
     private MetricRepository metrics;
 
-    /**
-     * Spied rather than mocked, purely to count delivery attempts: a poison record never reaches the
-     * repository, so the parser is the only place a redelivery is observable.
-     */
     @MockitoSpyBean
     private TelemetryParser parser;
 
@@ -99,14 +135,10 @@ class KafkaErrorHandlingIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        // A mock returns null for int[], which the consumer treats as "nothing to report" — but
-        // the honest default for a healthy repository is one stored row per message.
         given(metrics.saveAll(any())).willAnswer(invocation -> allStored(invocation.getArgument(0)));
 
         producer = new KafkaProducer<>(
                 KafkaTestUtils.producerProps(broker), new StringSerializer(), new StringSerializer());
-        // A fresh group per test reading from the beginning: the DLQ accumulates across tests, so
-        // assertions match on a per-test marker rather than on the topic being empty.
         Map<String, Object> props = KafkaTestUtils.consumerProps(broker, "dlq-" + UUID.randomUUID(), false);
         dlqConsumer = new KafkaConsumer<>(props, new StringDeserializer(), new StringDeserializer());
         dlqConsumer.subscribe(List.of(KafkaConfig.DLQ_TOPIC));
@@ -135,7 +167,6 @@ class KafkaErrorHandlingIntegrationTest {
     @DisplayName("a validation failure dead-letters on the first attempt, with no retry")
     void invalidTelemetryIsNotRetried() {
         String marker = marker();
-        // 'value' omitted — well-formed JSON that must not be ingested as 0.0.
         String payload = """
                 {"timestamp":"%s","sensor_id":"%s","metric_type":"substation_voltage","status":"OK"}"""
                 .formatted(Instant.now(), marker);
@@ -145,8 +176,6 @@ class KafkaErrorHandlingIntegrationTest {
         assertThat(awaitDlqRecord(marker)).isEqualTo(payload);
         verify(metrics, never()).save(any());
         verify(metrics, never()).saveAll(any());
-        // The actual no-retry claim: one delivery, straight to the DLQ. Under a policy that retries
-        // everything this is 3, and the partition sits blocked for the whole back-off first.
         verify(parser, times(1)).parse(payload);
     }
 
@@ -161,11 +190,6 @@ class KafkaErrorHandlingIntegrationTest {
         assertThat(pollDlq(marker, Duration.ofSeconds(5))).isNull();
     }
 
-    /**
-     * The batch-specific obligation. Three records arrive together; the middle one is poison. The
-     * listener must persist the first, dead-letter only the second, and let the third be redelivered
-     * — and the first must not be written again when that redelivery happens.
-     */
     @Test
     @DisplayName("a poison record inside a batch dead-letters alone; its neighbours persist exactly once")
     void poisonRecordInsideABatchDeadLettersAloneAndNeighboursPersistOnce() {
@@ -174,7 +198,6 @@ class KafkaErrorHandlingIntegrationTest {
         String after = marker();
         String poison = "{\"sensor_id\":\"" + poisonMarker + "\"";
 
-        // One flush for all three so they land in the same poll whenever the broker allows it.
         producer.send(new ProducerRecord<>(KafkaConfig.TOPIC, valid(before, 1.0)));
         producer.send(new ProducerRecord<>(KafkaConfig.TOPIC, poison));
         producer.send(new ProducerRecord<>(KafkaConfig.TOPIC, valid(after, 2.0)));
@@ -186,10 +209,8 @@ class KafkaErrorHandlingIntegrationTest {
             verify(metrics, atLeastOnce()).saveAll(argThat(batchContaining(after)));
         });
 
-        // Neither neighbour was dead-lettered ...
         assertThat(pollDlq(before, Duration.ofSeconds(3))).isNull();
         assertThat(pollDlq(after, Duration.ofSeconds(3))).isNull();
-        // ... and each was handed to the repository exactly once across every batch it saw.
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<TelemetryMessage>> batches = ArgumentCaptor.forClass(List.class);
         verify(metrics, atLeastOnce()).saveAll(batches.capture());
@@ -202,19 +223,11 @@ class KafkaErrorHandlingIntegrationTest {
         verify(metrics, never()).save(any());
     }
 
-    /**
-     * The half that used to lose data: a database blip made {@code save} throw, the record exhausted
-     * its two retries within ~3 seconds and was dead-lettered — valid telemetry gone from the
-     * hypertable for good, since nothing consumes the DLQ.
-     */
     @Test
     @DisplayName("a transient database failure is retried until it succeeds, not dead-lettered")
     void transientDatabaseFailureIsRetriedNotDeadLettered() {
         String marker = marker();
         AtomicInteger attempts = new AtomicInteger();
-        // Deliberately more failures than the old fixed policy's budget of three attempts. Anything
-        // less and this test passes against that policy too, proving nothing: the record would have
-        // recovered inside the old retry window rather than because retries are now unbounded.
         willAnswer(invocation -> {
             if (attempts.incrementAndGet() <= FAILURES_EXCEEDING_A_BOUNDED_POLICY) {
                 throw new RecoverableDataAccessException("connection reset by peer");
@@ -231,11 +244,6 @@ class KafkaErrorHandlingIntegrationTest {
                 .isNull();
     }
 
-    /**
-     * The counterpart: a row the database will never accept is not worth retrying forever, or the
-     * partition stalls behind it indefinitely. With batching the rejection first arrives for the
-     * whole batch; the listener must fall back to single-row inserts to pin the blame on one record.
-     */
     @Test
     @DisplayName("an unsatisfiable write dead-letters the offending row instead of retrying forever")
     void dataIntegrityViolationIsDeadLettered() {
@@ -247,12 +255,9 @@ class KafkaErrorHandlingIntegrationTest {
         send(payload);
 
         assertThat(awaitDlqRecord(marker)).isEqualTo(payload);
-        // One batch attempt, one row-level attempt to locate the culprit, no retries of either.
         verify(metrics, times(1)).saveAll(any());
         verify(metrics, times(1)).save(any());
     }
-
-    // ------------------------------------------------------------------ helpers
 
     private static int[] allStored(List<TelemetryMessage> batch) {
         int[] counts = new int[batch.size()];
@@ -279,7 +284,6 @@ class KafkaErrorHandlingIntegrationTest {
         producer.flush();
     }
 
-    /** Fails the test if no DLQ record carrying {@code marker} arrives within {@link #TIMEOUT}. */
     private String awaitDlqRecord(String marker) {
         String found = pollDlq(marker, TIMEOUT);
         assertThat(found)
@@ -288,7 +292,6 @@ class KafkaErrorHandlingIntegrationTest {
         return found;
     }
 
-    /** @return the matching DLQ payload, or {@code null} if none arrives before the deadline. */
     private String pollDlq(String marker, Duration timeout) {
         List<String> seen = new ArrayList<>();
         long deadline = System.nanoTime() + timeout.toNanos();

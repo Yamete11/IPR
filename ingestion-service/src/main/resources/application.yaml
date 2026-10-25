@@ -35,6 +35,10 @@ spring:
       fetch-min-size: 64KB
       properties:
         fetch.max.wait.ms: 500
+        # Cooperative rebalancing: when KEDA adds or removes a replica only the partitions that move
+        # are revoked, instead of every member stopping (the client default picks eager `range`).
+        # Safe as a single rolling update: the old default list already includes this assignor.
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
     listener:
       # The listener takes List<ConsumerRecord> and writes one JDBC batch per poll (see
       # consumer/TelemetryConsumer for how a single poison record is isolated from the batch).

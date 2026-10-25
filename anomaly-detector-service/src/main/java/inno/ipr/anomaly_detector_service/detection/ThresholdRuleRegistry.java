@@ -4,52 +4,41 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 /**
- * The validated, immutable rule set built from {@link AnomalyRulesProperties} at startup. Rejects a
- * misconfiguration loudly (empty list, duplicate metric, non-finite threshold) so the detector
- * never runs silently with no rules or with an ambiguous one.
+ * The rule set from {@link AnomalyRulesProperties}, indexed by metric. Rejects an empty list and a
+ * metric configured twice at startup, so the detector never runs silently with no rules or with an
+ * ambiguous one.
+ *
+ * <p>{@link #forMetric(String)} returns the rule monitoring a metric, or empty when the metric is not
+ * monitored.
  */
 @Component
 public class ThresholdRuleRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(ThresholdRuleRegistry.class);
 
-    private final Map<String, ThresholdRule> byMetric;
+    private final Map<String, ThresholdRule> byMetric = new HashMap<>();
 
     public ThresholdRuleRegistry(AnomalyRulesProperties properties) {
-        List<AnomalyRulesProperties.Rule> configured = properties.rules();
+        List<ThresholdRule> configured = properties.rules();
         if (configured == null || configured.isEmpty()) {
             throw new IllegalStateException("anomaly.rules must list at least one threshold rule");
         }
-        Map<String, ThresholdRule> rules = new LinkedHashMap<>();
-        for (AnomalyRulesProperties.Rule r : configured) {
-            ThresholdRule rule;
-            try {
-                rule = ThresholdRule.of(r.metricType(), r.aggregate(), r.comparison(), r.threshold());
-            } catch (IllegalArgumentException e) {
-                throw new IllegalStateException("Invalid anomaly.rules entry: " + e.getMessage(), e);
-            }
-            if (rules.putIfAbsent(rule.metricType(), rule) != null) {
+        for (ThresholdRule rule : configured) {
+            if (byMetric.putIfAbsent(rule.metricType(), rule) != null) {
                 throw new IllegalStateException(
                         "anomaly.rules lists metric '" + rule.metricType() + "' more than once");
             }
+            log.info("Threshold rule loaded: {}", rule.label());
         }
-        this.byMetric = Map.copyOf(rules);
-        rules.values().forEach(rule -> log.info("Threshold rule loaded: {}", rule.label()));
     }
 
-    /** The rule monitoring {@code metricType}, or empty when the metric is not monitored. */
     public Optional<ThresholdRule> forMetric(String metricType) {
         return Optional.ofNullable(byMetric.get(metricType));
-    }
-
-    /** All configured rules, in configuration order. */
-    public List<ThresholdRule> all() {
-        return List.copyOf(byMetric.values());
     }
 }

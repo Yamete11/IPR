@@ -224,6 +224,9 @@ def run(args: argparse.Namespace) -> int:
         # a large throughput win for a load generator at the cost of ~50ms of latency.
         "linger.ms": 50,
         "compression.type": "lz4",
+        # Idempotent producer (implies acks=all): a retry after a lost ack cannot write a duplicate
+        # reading or reorder a sensor's readings within its partition.
+        "enable.idempotence": True,
     })
     log.info("Producing to '%s' at %s: %d sensors (%d known + %d synthetic), interval=%.2fs, anomaly_prob=%.3f",
              args.topic, args.bootstrap, len(sensors), len(KNOWN_SENSORS), args.extra_sensors,

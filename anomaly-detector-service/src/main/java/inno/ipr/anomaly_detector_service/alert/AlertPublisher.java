@@ -2,6 +2,7 @@ package inno.ipr.anomaly_detector_service.alert;
 
 import inno.ipr.anomaly_detector_service.config.KafkaConfig;
 import inno.ipr.anomaly_detector_service.detection.ThresholdRule;
+import inno.ipr.anomaly_detector_service.domain.SeriesKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -12,94 +13,82 @@ import java.time.Instant;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * Publishes {@link Alert}s to {@code infrastructure-alerts} with <em>edge-triggered</em> dedup: an
- * alert fires only on the OK→breach transition, not on every poll a fault persists. A standing
- * fault would otherwise re-fire on every scheduler tick and flood the downstream responder.
+ * alert fires only on the OK→breach transition, so a standing fault does not re-fire on every poll
+ * and flood the responder. {@code active} maps each breaching series to the id of the alert that
+ * armed it. Alert ids are full UUIDs because the responder dedups on {@code alert_id}. State is
+ * in-memory, so a restart re-alerts any still-active fault.
  *
- * <p>The active set holds one key per breaching series ({@code sensorId|metricType}). {@code
- * publishIfNew} sends only when the key is newly added; {@code clear} removes it on recovery so the
- * next breach of that series fires again. A {@link ConcurrentHashMap}-backed set keeps this safe if
- * the scheduler ever overlaps. State is in-memory, so a restart re-alerts any still-active fault —
- * acceptable for this design.
+ * <p>{@link #publishIfNew(SeriesKey, ThresholdRule.Breach)} arms the series and sends an alert iff it
+ * was not already armed, returning {@code true} on the rising edge and {@code false} for a suppressed
+ * duplicate. If the record never reaches the broker (a delivery failure, or a serialisation or send
+ * failure thrown synchronously) the series is disarmed again, so the next poll retries instead of the
+ * fault going unreported for as long as it stands. The disarm is conditional on the key still holding
+ * <em>this</em> alert's id, so a late failure of an earlier alert cannot disarm a newer breach.
  *
- * <p>The key is <em>disarmed again</em> if the send never reaches the broker. Marking a series
- * alerting on the strength of an enqueue alone loses the alert twice over: the record never lands on
- * the topic, and the edge trigger then believes the series is already alerting, so no later poll
- * re-fires it for as long as the fault stands. A pipe sitting at zero pressure would produce no
- * incident at all.
+ * <p>{@link #clear(SeriesKey)} marks a series healthy so its next breach fires; a no-op if it was not
+ * armed.
+ *
+ * <p>{@link #retainOnly(Set)} disarms every armed series absent from this poll. A sensor that goes
+ * silent mid-fault never produces the healthy window {@code clear} waits for, so otherwise its next
+ * real fault would be suppressed.
  */
 @Component
 public class AlertPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(AlertPublisher.class);
 
-    private final KafkaTemplate<String, String> alertKafkaTemplate;
+    private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
-    private final Set<String> active = ConcurrentHashMap.newKeySet();
+    private final ConcurrentMap<SeriesKey, String> active = new ConcurrentHashMap<>();
 
-    public AlertPublisher(KafkaTemplate<String, String> alertKafkaTemplate, ObjectMapper objectMapper) {
-        this.alertKafkaTemplate = alertKafkaTemplate;
+    public AlertPublisher(KafkaTemplate<String, String> kafkaTemplate, ObjectMapper objectMapper) {
+        this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
     }
 
-    /**
-     * Sends an alert for a breaching series iff it was not already breaching. Returns {@code true}
-     * when an alert was handed to the producer (the rising edge), {@code false} when the breach was
-     * already active and thus suppressed.
-     *
-     * <p>A delivery failure (or a serialisation failure before it) removes the key again, so the
-     * next scheduler tick re-evaluates the still-breaching series and retries the alert.
-     */
-    public boolean publishIfNew(String sensorId, String metricType, ThresholdRule.Breach breach) {
-        String key = key(sensorId, metricType);
-        if (!active.add(key)) {
-            return false; // already breaching — suppress duplicate
+    public boolean publishIfNew(SeriesKey series, ThresholdRule.Breach breach) {
+        String alertId = "a-" + UUID.randomUUID();
+        if (active.putIfAbsent(series, alertId) != null) {
+            return false;
         }
 
-        Alert alert = new Alert(
-                "a-" + UUID.randomUUID().toString().substring(0, 8),
-                sensorId,
-                metricType,
-                breach.value(),
-                Instant.now(),
-                breach.rule());
-
-        String json;
+        Alert alert = new Alert(alertId, series.sensorId(), series.metricType(), breach.value(),
+                Instant.now(), breach.rule());
         try {
-            json = objectMapper.writeValueAsString(alert);
+            kafkaTemplate.send(KafkaConfig.ALERTS_TOPIC, series.sensorId(), objectMapper.writeValueAsString(alert))
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            active.remove(series, alertId);
+                            log.error("Alert {} for {} was NOT delivered; the next poll retries it",
+                                    alertId, series, ex);
+                        }
+                    });
         } catch (RuntimeException e) {
-            // Nothing was sent, so leaving the key armed would silence this series indefinitely.
-            active.remove(key);
+            active.remove(series, alertId);
             throw e;
         }
 
-        alertKafkaTemplate.send(KafkaConfig.ALERTS_TOPIC, sensorId, json)
-                .whenComplete((result, ex) -> {
-                    if (ex != null) {
-                        active.remove(key);
-                        log.error("Alert {} for {} on {} was NOT delivered — re-arming the edge trigger "
-                                        + "so the next poll retries it",
-                                alert.alertId(), metricType, sensorId, ex);
-                    }
-                });
-
-        log.warn("ALERT {} — {} on {} (value={}, rule={})",
-                alert.alertId(), metricType, sensorId, breach.value(), breach.rule());
+        log.warn("ALERT {} for {} (value={}, rule={})", alertId, series, breach.value(), breach.rule());
         return true;
     }
 
-    /**
-     * Marks a series healthy again, so a subsequent breach re-fires. No-op if it was not active.
-     */
-    public void clear(String sensorId, String metricType) {
-        if (active.remove(key(sensorId, metricType))) {
-            log.info("Recovered — {} on {} back within threshold", metricType, sensorId);
+    public void clear(SeriesKey series) {
+        if (active.remove(series) != null) {
+            log.info("Recovered: {} back within threshold", series);
         }
     }
 
-    private static String key(String sensorId, String metricType) {
-        return sensorId + "|" + metricType;
+    public void retainOnly(Set<SeriesKey> seen) {
+        active.keySet().removeIf(series -> {
+            boolean gone = !seen.contains(series);
+            if (gone) {
+                log.info("{} stopped reporting while alerting; disarming it", series);
+            }
+            return gone;
+        });
     }
 }
