@@ -81,16 +81,9 @@ public class AgeClient {
      */
     public void ensurePropertyIndex(String graph, String label) {
         checkGraphName(graph);
-        if (label == null || !GRAPH_NAME.matcher(label).matches()) {
-            throw new AgeQueryException("Illegal AGE label name: " + label);
-        }
+        checkLabelName(label);
         try {
-            Integer present = jdbc.queryForObject("""
-                    SELECT count(*) FROM ag_catalog.ag_label l
-                    JOIN ag_catalog.ag_graph g ON g.graphid = l.graph
-                    WHERE g.name = ? AND l.name = ?
-                    """, Integer.class, graph, label);
-            if (present == null || present == 0) {
+            if (!labelExists(graph, label)) {
                 return;
             }
             String index = graph + "_" + label + "_props_gin";
@@ -99,6 +92,46 @@ public class AgeClient {
         } catch (RuntimeException e) {
             throw new AgeQueryException("Failed to ensure property index on '" + graph + "'.'" + label + "'", e);
         }
+    }
+
+    /**
+     * Creates B-tree indexes on {@code start_id} and {@code end_id} of one edge type's table
+     * {@code "<graph>"."<Type>"(id, start_id, end_id, properties)}. AGE creates none, so without them
+     * every hop of a Cypher pattern ({@code (a)-[r]->(b)}) is a scan of the edge table, in both
+     * directions ({@code dependents} walks start → end, {@code dependencies} end → start). Same
+     * existence check and idempotency as {@link #ensurePropertyIndex(String, String)}.
+     */
+    public void ensureEdgeIndexes(String graph, String type) {
+        checkGraphName(graph);
+        checkLabelName(type);
+        try {
+            if (!labelExists(graph, type)) {
+                return;
+            }
+            for (String column : new String[]{"start_id", "end_id"}) {
+                String index = graph + "_" + type + "_" + column;
+                jdbc.execute("CREATE INDEX IF NOT EXISTS \"" + index + "\" ON \"" + graph + "\".\"" + type
+                        + "\" (" + column + ")");
+            }
+        } catch (RuntimeException e) {
+            throw new AgeQueryException("Failed to ensure edge indexes on '" + graph + "'.'" + type + "'", e);
+        }
+    }
+
+    private static void checkLabelName(String label) {
+        if (label == null || !GRAPH_NAME.matcher(label).matches()) {
+            throw new AgeQueryException("Illegal AGE label name: " + label);
+        }
+    }
+
+    /** A label's table only exists once the first vertex/edge with that label has been written. */
+    private boolean labelExists(String graph, String label) {
+        Integer present = jdbc.queryForObject("""
+                SELECT count(*) FROM ag_catalog.ag_label l
+                JOIN ag_catalog.ag_graph g ON g.graphid = l.graph
+                WHERE g.name = ? AND l.name = ?
+                """, Integer.class, graph, label);
+        return present != null && present > 0;
     }
 
     /**

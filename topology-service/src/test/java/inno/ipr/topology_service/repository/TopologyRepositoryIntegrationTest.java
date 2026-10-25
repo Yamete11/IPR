@@ -150,4 +150,14 @@ class TopologyRepositoryIntegrationTest {
         // AGE compiles the property map in the pattern to agtype containment, which GIN supports.
         assertThat(text).contains("properties @> '{\"id\": \"node-5\"}'::agtype");
     }
+
+    @Test
+    @DisplayName("index: start_id/end_id indexed on every edge type (AGE creates none)")
+    void edgeIndexesExist() {
+        List<String> indexes = jdbc.queryForList(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = ? ORDER BY indexname", String.class, GRAPH);
+        for (String type : List.of("PowerLine", "Pipeline", "SensorLink")) {
+            assertThat(indexes).contains(GRAPH + "_" + type + "_start_id", GRAPH + "_" + type + "_end_id");
+        }
+    }
 }

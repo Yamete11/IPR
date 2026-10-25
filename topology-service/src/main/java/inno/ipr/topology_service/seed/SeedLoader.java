@@ -123,7 +123,11 @@ public class SeedLoader implements ApplicationRunner {
             for (VertexLabel label : VertexLabel.values()) {
                 age.ensurePropertyIndex(graph, label.label());
             }
-            log.info("Property indexes ensured on '{}' for {} labels", graph, VertexLabel.values().length);
+            for (EdgeType type : EdgeType.values()) {
+                age.ensureEdgeIndexes(graph, type.type());
+            }
+            log.info("Indexes ensured on '{}': properties of {} vertex labels, start_id/end_id of {} edge types",
+                    graph, VertexLabel.values().length, EdgeType.values().length);
         }
     }
 
