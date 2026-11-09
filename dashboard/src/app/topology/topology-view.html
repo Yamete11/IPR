@@ -4,6 +4,21 @@
   <div class="error">topology-service unavailable: {{ topology.error()?.message }}</div>
 }
 
+<div class="toolbar">
+  <mat-form-field appearance="outline" subscriptSizing="dynamic">
+    <mat-label>District</mat-label>
+    <mat-select [value]="district()" (selectionChange)="district.set($event.value)">
+      <mat-option value="all">All districts</mat-option>
+      @for (s of districts(); track s.id) {
+        <mat-option [value]="s.id">{{ displayName(s) }} · {{ s.id }}</mat-option>
+      }
+    </mat-select>
+  </mat-form-field>
+  <mat-slide-toggle [checked]="showSensors()" (change)="showSensors.set($event.checked)">
+    Show sensors
+  </mat-slide-toggle>
+</div>
+
 <div class="layout">
   <mat-card appearance="outlined" class="graph-card">
     <div #graph class="graph"></div>

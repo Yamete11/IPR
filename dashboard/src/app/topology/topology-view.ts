@@ -13,14 +13,20 @@ import {
 import { rxResource, toSignal } from '@angular/core/rxjs-interop';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
+import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatIconModule } from '@angular/material/icon';
 import { MatListModule } from '@angular/material/list';
+import { MatSelectModule } from '@angular/material/select';
+import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { Router, RouterLink } from '@angular/router';
 import cytoscape, { Core, ElementDefinition } from 'cytoscape';
 import { catchError, forkJoin, map, of } from 'rxjs';
 
 import { IncidentApi } from '../core/incident-api';
 import { Topology, TopologyApi, Vertex } from '../core/topology-api';
+import { districtOf, substationOf, substations } from './district';
+
+const ALL = 'all';
 
 /** Node color + shape per vertex label of the seed graph (city-topology.json). */
 export const LABEL_STYLE: Record<string, { color: string; shape: cytoscape.Css.NodeShape }> = {
@@ -38,7 +44,17 @@ const EDGE_COLOR: Record<string, string> = {
 
 @Component({
   selector: 'app-topology-view',
-  imports: [JsonPipe, RouterLink, MatButtonModule, MatCardModule, MatIconModule, MatListModule],
+  imports: [
+    JsonPipe,
+    RouterLink,
+    MatButtonModule,
+    MatCardModule,
+    MatFormFieldModule,
+    MatIconModule,
+    MatListModule,
+    MatSelectModule,
+    MatSlideToggleModule,
+  ],
   templateUrl: './topology-view.html',
   styleUrl: './topology-view.scss',
 })
@@ -58,14 +74,37 @@ export class TopologyView implements OnDestroy {
 
   protected readonly topology = rxResource({ stream: () => this.topologyApi.topology() });
 
-  /** Sensors that have at least one incident get a red ring; the graph still renders without incident-api. */
+  /**
+   * Sensors and assets with at least one incident get a red ring (the asset too, so the ring shows
+   * while sensors are hidden); the graph still renders without incident-api.
+   */
   private readonly incidentSensors = toSignal(
     this.incidentApi.incidents(1000).pipe(
-      map((list) => new Set(list.map((i) => i.sensorId))),
+      map((list) => new Set(list.flatMap((i) => (i.assetId ? [i.sensorId, i.assetId] : [i.sensorId])))),
       catchError(() => of(new Set<string>())),
     ),
     { initialValue: new Set<string>() },
   );
+
+  /** District filter: one substation's subtree, or `all`. Sensors are hidden unless toggled on. */
+  protected readonly district = signal<string>(ALL);
+  protected readonly showSensors = signal(false);
+  protected readonly districts = computed(() => {
+    const topology = this.topology.value();
+    return topology ? substations(topology) : [];
+  });
+  private readonly visible = computed(() => {
+    const topology = this.topology.value();
+    if (!topology) return new Set<string>();
+    const district = this.district();
+    const inScope = district === ALL ? null : districtOf(topology, district);
+    return new Set(
+      topology.vertices
+        .filter((v) => (inScope ? inScope.has(v.id) : true))
+        .filter((v) => this.showSensors() || v.label !== 'Sensor')
+        .map((v) => v.id),
+    );
+  });
 
   protected readonly selectedId = signal<string | undefined>(undefined);
   protected readonly selected = computed(() =>
@@ -94,12 +133,35 @@ export class TopologyView implements OnDestroy {
       if (topology && !this.cy) {
         this.cy = this.createGraph(topology);
         const focus = this.focus();
-        if (focus) this.selectedId.set(focus);
+        if (focus) {
+          this.district.set(substationOf(topology, focus) ?? ALL);
+          if (topology.vertices.find((v) => v.id === focus)?.label === 'Sensor') this.showSensors.set(true);
+          this.selectedId.set(focus);
+        }
       }
       const sensors = this.incidentSensors();
       this.cy?.nodes().forEach((n) => {
         n.toggleClass('has-incident', sensors.has(n.id()));
       });
+    });
+
+    // Show only the chosen district (and sensors if toggled), and lay out just what is visible.
+    afterRenderEffect(() => {
+      const cy = this.cy;
+      const visible = this.visible();
+      const topology = this.topology.value();
+      if (!cy || !topology) return;
+      cy.batch(() => {
+        cy.nodes().forEach((n) => {
+          n.toggleClass('hidden', !visible.has(n.id()));
+        });
+      });
+      const shown = cy.elements().not('.hidden').filter((el) => el.isNode() || !el.connectedNodes('.hidden').length);
+      const roots = substations(topology).map((v) => v.id).filter((id) => visible.has(id));
+      shown
+        .layout({ name: 'breadthfirst', directed: false, padding: 24, spacingFactor: 1.2, roots, animate: false })
+        .run();
+      cy.fit(shown, 24);
     });
 
     // Highlight the selected vertex and the vertices that depend on it.
@@ -153,8 +215,9 @@ export class TopologyView implements OnDestroy {
     const cy = cytoscape({
       container: this.container().nativeElement,
       elements,
-      // Undirected BFS from the substations so sensors (sensor → node edges) hang under their node.
-      layout: { name: 'breadthfirst', directed: false, padding: 24, spacingFactor: 1.2, roots: this.roots(topology) },
+      // Positions come from the visibility effect, which lays out only the shown district
+      // (undirected BFS from the substations, so sensors hang under the asset they watch).
+      layout: { name: 'preset' },
       wheelSensitivity: 0.3,
       style: [
         {
@@ -201,6 +264,7 @@ export class TopologyView implements OnDestroy {
         { selector: 'node.dependent', style: { 'overlay-color': '#c62828', 'overlay-opacity': 0.25, 'overlay-padding': 6 } },
         { selector: 'node.dependency', style: { 'overlay-color': '#1565c0', 'overlay-opacity': 0.2, 'overlay-padding': 6 } },
         { selector: 'node.faded', style: { opacity: 0.35 } },
+        { selector: 'node.hidden', style: { display: 'none' } },
       ],
     });
     cy.on('tap', 'node', (evt) => this.select(evt.target.id()));
@@ -208,11 +272,5 @@ export class TopologyView implements OnDestroy {
       if (evt.target === cy) this.clear();
     });
     return cy;
-  }
-
-  /** Substations sit at the top of the breadth-first layout. */
-  private roots(topology: Topology): string[] {
-    const roots = topology.vertices.filter((v) => v.label === 'Substation').map((v) => v.id);
-    return roots.length ? roots : topology.vertices.slice(0, 1).map((v) => v.id);
   }
 }

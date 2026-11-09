@@ -6,9 +6,6 @@ import com.anthropic.models.messages.OutputConfig;
 import com.anthropic.models.messages.StopReason;
 import com.anthropic.models.messages.StructuredMessageCreateParams;
 import com.anthropic.models.messages.ThinkingConfigAdaptive;
-import inno.ipr.ai_incident_responder_service.alert.Alert;
-import inno.ipr.ai_incident_responder_service.domain.ImpactedObject;
-import inno.ipr.ai_incident_responder_service.domain.MetricSummary;
 import inno.ipr.ai_incident_responder_service.exception.UnplannableAlertException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.slf4j.Logger;
@@ -34,7 +31,7 @@ import java.util.List;
  * mid-structured-output — which surfaces as a parse failure, not as a short answer. 16k leaves ample
  * room for both halves.
  *
- * <p>{@link #plan(Alert, MetricSummary, List)} checks for a safety-classifier decline first: that is
+ * <p>{@link #plan(IncidentContext)} checks for a safety-classifier decline first: that is
  * HTTP 200 with {@code stop_reason} {@code refusal} and no plan, so it is reported as such instead of
  * failing on the missing content. A refusal, a {@code max_tokens} cut-off and a response with no
  * structured content all throw {@link UnplannableAlertException}: retrying the same prompt would
@@ -44,7 +41,7 @@ import java.util.List;
  * = system + RAG context + schema, output = thinking + the plan. {@code sizeOf(List)} counts a plan
  * list for that line; Claude may leave a list null.
  *
- * <p>{@link #buildParams(Alert, MetricSummary, List)} builds the request: adaptive thinking (Claude
+ * <p>{@link #buildParams(IncidentContext)} builds the request: adaptive thinking (Claude
  * reasons about severity + dependencies before answering) at an explicit effort — Claude Opus 5.5
  * defaults to {@code medium}, one level below Opus 5, so leaving it unset would silently lower the
  * depth of every plan — the plan schema as structured output, the fixed role as the system prompt
@@ -82,8 +79,9 @@ public class ClaudeIncidentPlanner implements IncidentPlanner {
     }
 
     @Override
-    public IncidentPlan plan(Alert alert, MetricSummary history, List<ImpactedObject> impacted) {
-        StructuredMessageCreateParams<IncidentPlan> params = buildParams(alert, history, impacted);
+    public IncidentPlan plan(IncidentContext context) {
+        var alert = context.alert();
+        StructuredMessageCreateParams<IncidentPlan> params = buildParams(context);
 
         var response = CircuitBreaker
                 .decorateSupplier(circuitBreaker, () -> client.messages().create(params))
@@ -115,15 +113,14 @@ public class ClaudeIncidentPlanner implements IncidentPlanner {
         return plan;
     }
 
-    StructuredMessageCreateParams<IncidentPlan> buildParams(Alert alert, MetricSummary history,
-                                                           List<ImpactedObject> impacted) {
+    StructuredMessageCreateParams<IncidentPlan> buildParams(IncidentContext context) {
         StructuredMessageCreateParams.Builder<IncidentPlan> builder = MessageCreateParams.builder()
                 .model(model)
                 .maxTokens(MAX_TOKENS)
                 .thinking(ThinkingConfigAdaptive.builder().build())
                 .outputConfig(IncidentPlan.class)
                 .system(IncidentPromptBuilder.SYSTEM_PROMPT)
-                .addUserMessage(IncidentPromptBuilder.build(alert, history, impacted));
+                .addUserMessage(IncidentPromptBuilder.build(context));
         OutputConfig withSchema = builder.build().rawParams().outputConfig().orElseThrow();
         return builder.outputConfig(withSchema.toBuilder().effort(effort).build()).build();
     }

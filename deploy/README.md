@@ -117,7 +117,9 @@ kubectl -n smartcity port-forward svc/incident-api-service 8081:8081
 ```
 
 Then `POST http://localhost:8080/graphql` with `{ "query": "{ dependents(id: \"node-5\") { id label } }" }`
-returns `bld-12` and `bld-19`, and `{ vertices { id } }` returns the 9 seeded vertices. On
+returns `bld-12` and `bld-19`, and `{ vertices { id } }` returns 1444 vertices: the 9 hand-seeded
+ones plus the generated city for `CITY_EXTRA_SENSORS=997` (21 substations `sub-d00`…`sub-d20`, 84
+nodes, 333 buildings, 997 sensors; `dependents(id: "sub-d00")` returns 20 objects). On
 `http://localhost:8081/graphql`, `{ incidents { incidentId criticality impactedObjects } }`
 is empty until the load runs.
 
@@ -127,6 +129,10 @@ Generate telemetry and watch the pipeline:
 .\deploy\scripts\demo-hpa.ps1        # scales sensor-simulator to 1: ~1000 sensors at 100 ms
 ```
 
+The chart runs the simulator with `--anomaly-prob 0 --cascade-every 300`: no random faults, but
+10 s after start and then every 5 minutes the next district's substation loses voltage and, 5 s
+later, the water pressure in all its buildings drops.
+
 Within a minute or two:
 
 - `kubectl -n smartcity get hpa -w` shows `keda-hpa-ingestion-service` growing from 1 towards 6
@@ -134,10 +140,12 @@ Within a minute or two:
   (`kubectl -n smartcity get scaledobject` shows it Active).
 - `kubectl -n smartcity logs deploy/anomaly-detector-service` shows `ALERT` lines for the
   injected faults.
-- `{ incidentsBySensor(sensorId: "s-00042") { criticality impactedObjects remediationSteps } }`
-  on the incident API returns incidents whose impacted objects include `node-5`, `bld-12` and
-  `bld-19` (resolved from the AGE graph). In mock mode the plan is the deterministic offline
-  one; `model` is `mock`.
+- Per cascade the responder plans **one** incident (the first voltage alert, `model` `mock`) and
+  files the other voltage alerts of that substation and the pressure alerts of its buildings
+  under it (`model` `correlated`, no Claude call):
+  `kubectl -n smartcity exec timescaledb-0 -- psql -U smartcity -d smartcity -c "select model, root_incident_id is null as root, count(*) from incidents group by 1, 2"`.
+  On the dashboard the root incident shows its crews and the linked incidents; a linked one shows
+  "Secondary effect of …".
 
 Stop the load with `.\deploy\scripts\demo-hpa.ps1 -Stop`; after the 120 s cooldown the ingestion
 deployment returns to 1 replica.

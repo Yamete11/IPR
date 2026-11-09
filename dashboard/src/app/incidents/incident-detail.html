@@ -12,7 +12,23 @@
   <p class="meta">
     {{ i.createdAt | date: 'yyyy-MM-dd HH:mm:ss' }} · incident <code>{{ i.incidentId }}</code> ·
     alert <code>{{ i.alertId }}</code> · model <code>{{ i.model ?? '—' }}</code>
+    @if (i.assetId) {
+      · asset <code>{{ i.assetId }}</code>
+    }
   </p>
+
+  @if (i.rootIncident; as root) {
+    <mat-card appearance="outlined" class="block caused-by">
+      <mat-card-content>
+        <mat-icon>account_tree</mat-icon>
+        <span>
+          Secondary effect of
+          <a [routerLink]="['/incidents', root.incidentId]">{{ root.sensorId }} at {{ root.assetId ?? '—' }}</a>,
+          upstream in the network graph. No separate plan was requested.
+        </span>
+      </mat-card-content>
+    </mat-card>
+  }
 
   @if (i.summary) {
     <mat-card appearance="outlined" class="block">
@@ -44,12 +60,48 @@
         </mat-chip-set>
       </mat-card-content>
       <mat-card-actions>
-        <a mat-button [routerLink]="['/topology']" [queryParams]="{ focus: i.sensorId }">
+        <a mat-button [routerLink]="['/topology']" [queryParams]="{ focus: i.assetId ?? i.sensorId }">
           <mat-icon>hub</mat-icon> Show in topology
         </a>
       </mat-card-actions>
     </mat-card>
+
+    <mat-card appearance="outlined">
+      <mat-card-header><mat-card-title>Responsible crews</mat-card-title></mat-card-header>
+      <mat-card-content>
+        @for (c of i.crews; track c.crewId) {
+          <div class="crew">
+            <strong>{{ c.name }}</strong>
+            @if (c.phone) {
+              <span class="phone">{{ c.phone }}</span>
+            }
+            <div class="crew-assets">{{ c.assets.join(', ') }}</div>
+          </div>
+        } @empty {
+          <p class="empty">No crew assigned in the graph.</p>
+        }
+      </mat-card-content>
+    </mat-card>
   </div>
+
+  @if (i.linkedIncidents.length) {
+    <mat-card appearance="outlined" class="block">
+      <mat-card-header>
+        <mat-card-title>Linked incidents ({{ i.linkedIncidents.length }})</mat-card-title>
+        <mat-card-subtitle>Downstream alerts filed under this one instead of getting their own plan</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        @for (l of i.linkedIncidents; track l.incidentId) {
+          <a class="linked" [routerLink]="['/incidents', l.incidentId]">
+            <span>{{ l.detectedAt | date: 'HH:mm:ss' }}</span>
+            <span>{{ l.sensorId }} · {{ l.metricType ?? '—' }}</span>
+            <span>{{ l.assetId ?? '—' }}</span>
+            <code>{{ l.model ?? '—' }}</code>
+          </a>
+        }
+      </mat-card-content>
+    </mat-card>
+  }
 
   <mat-card appearance="outlined" class="block">
     <mat-card-header>

@@ -118,9 +118,45 @@ What it shows:
 
 So on PostgreSQL + AGE the graph model wins on **expressiveness** (one readable `MATCH` instead of a
 recursive CTE; aggregation and paths on the same pattern), not on raw speed for deep traversals. For
-this project's topology (9 seed vertices, depth ≤ 3) Cypher is the right trade-off; at city scale
+this project's topology (1444 vertices with the generated city, depth ≤ 2) Cypher is the right
+trade-off (measured below); at city scale
 (~10⁴–10⁵ assets) the dependency walk would move to a recursive CTE over AGE's tables (the
 "SQL over AGE tables" column — same data, no second copy) or to a native graph store.
 
 Reproduce: `cd topology-service && ./gradlew graphBenchmark` (needs Docker; ~3 min, ~35 s of it loading
 the graph). The run writes `build/reports/graph-vs-sql.md`.
+
+## 6. The generated city in production (2026-11-08)
+
+Since 2026-11-08 the graph is not only the 9-vertex hand seed: topology-service also generates a city
+for every synthetic simulator sensor (`SyntheticCity`, `CITY_EXTRA_SENSORS=997`): 21 substations,
+84 nodes, 333 buildings, 997 sensors — **1444 vertices, 1422 edges** in all.
+
+**Loading.** One transaction, `UNWIND $rows AS r CREATE (:Label {...})` and
+`UNWIND ... MATCH (a:L1 {id: r.s}), (b:L2 {id: r.d}) CREATE (a)-[:T]->(b) RETURN 1` in batches of 500
+(the benchmark's approach, with labeled endpoints and a row-count check), about 10 statements instead
+of one `MERGE` per entity. In the Kind cluster: **1.4 s** for 1435 vertices, 1414 edges and 21 crews.
+A fingerprint in `public.topology_seed_state` makes restarts a single query.
+
+**The responder's queries on it** (`EXPLAIN ANALYZE`, age-db pod in Kind, execution time):
+
+| Query (per alert) | Shape | Cold | Warm |
+|---|---|---|---|
+| Monitored asset | `(s:Sensor {id})-[:SensorLink]->(a)`, fixed one hop | 0.4 ms | — |
+| Impact + crews, from a substation (20 objects) | `cypher((n:Substation {id})-[*0..3]->(d)) LEFT JOIN crew tables` | 64 ms | 10 ms |
+| Upstream, from a building | `(n:ResidentialBuilding {id})<-[*1..3]-(u)` | 3.5 ms | 5 ms |
+| Same impact walk with `*0..10`, no join | for comparison | — | 5.7 ms |
+
+All well inside the 50 ms budget and negligible next to a Claude call. The depth bound of 3 is a
+guard, not an optimisation: at this size `*0..3` and `*0..10` cost the same, because the tree is only
+two hops deep. The cold number is the VLE executor building its in-memory graph context on a fresh
+connection (§5, point 2); a pooled connection pays it once.
+
+**What the graph now decides.** Besides enriching the prompt, the responder uses the upstream walk
+for root-cause correlation: an alert under an active upstream incident is filed under it without a
+Claude call. One cascade run in Kind (one district: 16 voltage + 16 pressure sensors) produced 32
+incidents with **2 planner calls instead of 32**: the first pressure alert arrived before its
+substation's (the detector publishes a poll in sensor-id order) and was planned, then adopted by the
+substation's incident; the other 30 were correlated directly. See
+[`system-overview.md`](system-overview.md#граф-города-и-корреляция-инцидентов).
+

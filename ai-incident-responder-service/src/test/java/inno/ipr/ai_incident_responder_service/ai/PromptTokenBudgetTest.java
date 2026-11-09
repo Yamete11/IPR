@@ -74,7 +74,7 @@ class PromptTokenBudgetTest {
     }
 
     private long count(MetricSummary history, List<ImpactedObject> impacted) {
-        MessageCreateParams raw = planner.buildParams(ALERT, history, impacted).rawParams();
+        MessageCreateParams raw = planner.buildParams(new IncidentContext(ALERT, history, impacted, List.of())).rawParams();
         MessageCountTokensParams params = MessageCountTokensParams.builder()
                 .model(raw.model())
                 .system(raw.system().orElseThrow().asString())

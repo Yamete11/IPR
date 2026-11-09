@@ -15,6 +15,10 @@ config:
   AI_CLAUDE_MODEL: claude-opus-5-5
   # A cold cluster can take a while before ingestion-service has created the hypertable.
   ANOMALY_SCHEMA_WAIT_TIMEOUT: 15m
+  # Synthetic sensors on top of the 3 hand-seeded ones. One value for both sides of the city:
+  # sensor-simulator emits that many (--extra-sensors default) and topology-service generates the
+  # substations, nodes, buildings and crews they are linked to (SyntheticCity).
+  CITY_EXTRA_SENSORS: "997"
 
 # Secret `postgres-credentials`, shared by both StatefulSets and every service.
 postgres:

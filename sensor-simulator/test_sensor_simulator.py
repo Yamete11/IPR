@@ -14,8 +14,12 @@ import pytest
 from sensor_simulator import (
     KNOWN_SENSORS,
     METRICS,
+    CascadeScheduler,
+    District,
     Sensor,
     build_sensors,
+    districts_of,
+    layout_of,
     make_message,
     parse_args,
 )
@@ -157,7 +161,8 @@ def test_timestamps_are_distinct_and_increasing_for_back_to_back_readings():
 
 # --------------------------------------------------------------------------------------- the CLI
 
-def test_defaults():
+def test_defaults(monkeypatch):
+    monkeypatch.delenv("CITY_EXTRA_SENSORS", raising=False)
     args = parse_args([])
     assert args.topic == "city-telemetry"
     assert args.interval == 2.0
@@ -174,6 +179,8 @@ def test_defaults():
     ["--fault-hold", "0"],
     ["--extra-sensors", "-1"],
     ["--max-messages", "-5"],
+    ["--cascade-every", "-1"],
+    ["--cascade-delay", "-1"],
 ])
 def test_invalid_arguments_are_rejected(argv):
     with pytest.raises(SystemExit) as exit_info:
@@ -187,3 +194,80 @@ def test_valid_arguments_are_accepted():
     assert args.interval == 0.5
     assert args.anomaly_prob == 1.0
     assert args.extra_sensors == 100
+
+
+def test_extra_sensors_default_comes_from_the_shared_city_variable(monkeypatch):
+    monkeypatch.setenv("CITY_EXTRA_SENSORS", "997")
+    assert parse_args([]).extra_sensors == 997
+    assert parse_args(["--extra-sensors", "5"]).extra_sensors == 5
+
+
+def test_cascade_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("CITY_EXTRA_SENSORS", raising=False)
+    args = parse_args([])
+    assert args.cascade_every == 0
+    assert args.cascade_delay >= 0
+
+
+# ------------------------------------------------------------------------------ the city layout
+
+# Same fixture as topology-service SyntheticCityTest: the cascade only works if both sides agree.
+@pytest.mark.parametrize("sensor_id, asset, district", [
+    ("s-01000", "bld-d00-0-0", "d00"),
+    ("s-01001", "node-d00-0", "d00"),
+    ("s-01002", "sub-d00", "d00"),
+    ("s-01012", "bld-d00-1-0", "d00"),
+    ("s-01996", "bld-d20-3-0", "d20"),
+])
+def test_layout_matches_the_topology_service_city(sensor_id, asset, district):
+    index = int(sensor_id[2:]) - 1000
+    assert layout_of(index) == (asset, district)
+    # The simulator gives that index the metric the layout links it by.
+    assert build_sensors(index + 1)[-1].sensor_id == sensor_id
+
+
+def test_districts_group_voltage_and_pressure_sensors_by_substation():
+    districts = districts_of(997)
+
+    assert len(districts) == 21 + 1
+    first = districts[0]
+    assert first.substation == "sub-d00"
+    assert first.voltage[0] == "s-01002" and len(first.voltage) == 16
+    assert first.pressure[0] == "s-01000" and len(first.pressure) == 16
+    assert districts[-1] == District("sub-1", ["s-00311"], ["s-00042"])
+
+
+def test_without_synthetic_sensors_the_hand_seeded_district_still_cascades():
+    assert districts_of(0) == [District("sub-1", ["s-00311"], ["s-00042"])]
+
+
+# --------------------------------------------------------------------------------- the cascade
+
+def test_cascade_fails_voltage_first_then_pressure_after_the_delay():
+    district = District("sub-d00", ["s-01002"], ["s-01000", "s-01003"])
+    scheduler = CascadeScheduler([district], every=300, delay=5, start=0, first_after=10)
+
+    assert scheduler.due(9.9) == []
+    assert scheduler.due(10) == [("sub-d00", "voltage", ["s-01002"])]
+    assert scheduler.due(14) == []
+    assert scheduler.due(15) == [("sub-d00", "pressure", ["s-01000", "s-01003"])]
+    assert scheduler.due(100) == []
+
+
+def test_cascade_visits_districts_round_robin():
+    districts = [District("sub-a", ["v-a"], ["p-a"]), District("sub-b", ["v-b"], ["p-b"])]
+    scheduler = CascadeScheduler(districts, every=60, delay=0, start=0, first_after=0)
+
+    fired = [group[0] for now in (0, 60, 120) for group in scheduler.due(now) if group[1] == "voltage"]
+
+    assert fired == ["sub-a", "sub-b", "sub-a"]
+
+
+def test_forced_fault_holds_the_fault_value():
+    sensor = Sensor("s-01000", "pipe_pressure", METRICS["pipe_pressure"]["baseline"])
+    sensor.force_fault(3)
+
+    readings = [sensor.next_reading(anomaly_prob=0.0) for _ in range(4)]
+
+    assert readings[:3] == [(0.0, "CRITICAL")] * 3
+    assert readings[3][1] != "CRITICAL"

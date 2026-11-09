@@ -9,12 +9,31 @@ export interface Incident {
   alertId: string;
   sensorId: string;
   metricType: string | null;
+  /** Graph asset the sensor watches; null if the sensor is not in the topology graph. */
+  assetId: string | null;
+  /** Set when the responder filed this as a secondary effect of an upstream incident. */
+  rootIncidentId: string | null;
+  detectedAt: string | null;
   criticality: string;
   impactedObjects: string[];
   remediationSteps: string[];
   summary: string | null;
   model: string | null;
   createdAt: string;
+}
+
+export interface IncidentCrew {
+  crewId: string;
+  name: string;
+  phone: string | null;
+  assets: string[];
+}
+
+/** The detail page's incident: plus its crews, its root and what is filed under it. */
+export interface IncidentDetailView extends Incident {
+  crews: IncidentCrew[];
+  rootIncident: Pick<Incident, 'incidentId' | 'sensorId' | 'assetId' | 'summary'> | null;
+  linkedIncidents: Pick<Incident, 'incidentId' | 'sensorId' | 'metricType' | 'assetId' | 'detectedAt' | 'model'>[];
 }
 
 export interface Metric {
@@ -25,8 +44,14 @@ export interface Metric {
   status: string;
 }
 
-const INCIDENT_FIELDS = `incidentId alertId sensorId metricType criticality impactedObjects
-  remediationSteps summary model createdAt`;
+const INCIDENT_FIELDS = `incidentId alertId sensorId metricType assetId rootIncidentId detectedAt criticality
+  impactedObjects remediationSteps summary model createdAt`;
+
+// Nested fields are resolved per incident, so only the single-incident query asks for them.
+const DETAIL_FIELDS = `${INCIDENT_FIELDS}
+  crews { crewId name phone assets }
+  rootIncident { incidentId sensorId assetId summary }
+  linkedIncidents { incidentId sensorId metricType assetId detectedAt model }`;
 
 @Injectable({ providedIn: 'root' })
 export class IncidentApi {
@@ -42,11 +67,11 @@ export class IncidentApi {
       .pipe(map((d) => d.incidents));
   }
 
-  incident(id: string): Observable<Incident | null> {
+  incident(id: string): Observable<IncidentDetailView | null> {
     return this.gql
-      .query<{ incident: Incident | null }>(
+      .query<{ incident: IncidentDetailView | null }>(
         INCIDENTS_ENDPOINT,
-        `query($id: ID!) { incident(id: $id) { ${INCIDENT_FIELDS} } }`,
+        `query($id: ID!) { incident(id: $id) { ${DETAIL_FIELDS} } }`,
         { id },
       )
       .pipe(map((d) => d.incident));

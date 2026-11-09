@@ -3,6 +3,8 @@ package inno.ipr.ai_incident_responder_service.consumer;
 import inno.ipr.ai_incident_responder_service.ai.IncidentPlan;
 import inno.ipr.ai_incident_responder_service.ai.IncidentPlanner;
 import inno.ipr.ai_incident_responder_service.config.KafkaConfig;
+import inno.ipr.ai_incident_responder_service.correlation.IncidentCorrelator;
+import inno.ipr.ai_incident_responder_service.domain.GraphContext;
 import inno.ipr.ai_incident_responder_service.domain.ImpactedObject;
 import inno.ipr.ai_incident_responder_service.domain.Incident;
 import inno.ipr.ai_incident_responder_service.domain.MetricSummary;
@@ -35,12 +37,14 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
@@ -99,6 +103,9 @@ class AlertPipelineIntegrationTest {
     @MockitoBean
     private IncidentPlanner planner;
 
+    @MockitoBean
+    private IncidentCorrelator correlator;
+
     private Producer<String, String> producer;
     private Consumer<String, String> dlqConsumer;
 
@@ -106,15 +113,16 @@ class AlertPipelineIntegrationTest {
     void setUp() {
         given(metrics.findLastHour(anyString(), anyString(), any()))
                 .willReturn(new MetricSummary(60, 0.0, 4.2, 3.0, 0.0, Instant.now()));
-        given(graph.findImpacted(anyString())).willReturn(List.of(
-                new ImpactedObject("node-5", "DistributionNode", Map.of("name", "North")),
+        ImpactedObject node = new ImpactedObject("node-5", "DistributionNode", Map.of("name", "North"));
+        given(graph.loadContext(anyString(), anyBoolean())).willReturn(new GraphContext(node, List.of(node,
                 new ImpactedObject("bld-12", "ResidentialBuilding", Map.of()),
-                new ImpactedObject("bld-19", "ResidentialBuilding", Map.of())));
+                new ImpactedObject("bld-19", "ResidentialBuilding", Map.of())), List.of(), List.of()));
+        given(correlator.findRoot(any(), any())).willReturn(Optional.empty());
+        given(correlator.persist(any(), any())).willReturn(new IncidentCorrelator.Outcome(true, null, 0));
         given(planner.model()).willReturn("mock");
-        given(planner.plan(any(), any(), any())).willReturn(new IncidentPlan("HIGH", "Zero pressure at node-5",
+        given(planner.plan(any())).willReturn(new IncidentPlan("HIGH", "Zero pressure at node-5",
                 List.of("DistributionNode node-5", "ResidentialBuilding bld-12", "ResidentialBuilding bld-19"),
                 List.of("Dispatch a crew.", "Confirm restoration.")));
-        given(incidents.save(any())).willReturn(1);
 
         producer = new KafkaProducer<>(
                 KafkaTestUtils.producerProps(broker), new StringSerializer(), new StringSerializer());
@@ -137,14 +145,14 @@ class AlertPipelineIntegrationTest {
         send(alert(alertId, "s-00042"));
 
         ArgumentCaptor<Incident> saved = ArgumentCaptor.forClass(Incident.class);
-        await().atMost(TIMEOUT).untilAsserted(() -> verify(incidents).save(saved.capture()));
+        await().atMost(TIMEOUT).untilAsserted(() -> verify(correlator).persist(saved.capture(), any()));
         Incident incident = saved.getValue();
         assertThat(incident.alertId()).isEqualTo(alertId);
         assertThat(incident.sensorId()).isEqualTo("s-00042");
         assertThat(incident.criticality()).isEqualTo("HIGH");
         assertThat(incident.model()).isEqualTo("mock");
         assertThat(incident.impactedObjectsJson()).contains("node-5", "bld-12", "bld-19");
-        verify(graph).findImpacted("s-00042");
+        verify(graph).loadContext(eq("s-00042"), anyBoolean());
         verify(metrics).findLastHour(eq("s-00042"), eq("pipe_pressure"), any());
         assertThat(pollDlq(alertId, Duration.ofSeconds(3))).isNull();
     }
@@ -158,8 +166,8 @@ class AlertPipelineIntegrationTest {
         send(poison);
 
         assertThat(pollDlq(marker, TIMEOUT)).isEqualTo(poison);
-        verify(planner, never()).plan(any(), any(), any());
-        verify(incidents, never()).save(any());
+        verify(planner, never()).plan(any());
+        verify(correlator, never()).persist(any(), any());
     }
 
     @Test
@@ -171,7 +179,7 @@ class AlertPipelineIntegrationTest {
         send(payload);
 
         assertThat(pollDlq(marker, TIMEOUT)).isEqualTo(payload);
-        verify(planner, never()).plan(any(), any(), any());
+        verify(planner, never()).plan(any());
     }
 
     @Test
@@ -184,8 +192,8 @@ class AlertPipelineIntegrationTest {
 
         await().atMost(TIMEOUT).untilAsserted(() -> verify(incidents).existsByAlertId(alertId));
         assertThat(pollDlq(alertId, Duration.ofSeconds(2))).isNull();
-        verify(planner, never()).plan(any(), any(), any());
-        verify(incidents, never()).save(any());
+        verify(planner, never()).plan(any());
+        verify(correlator, never()).persist(any(), any());
     }
 
     @Test
@@ -198,13 +206,13 @@ class AlertPipelineIntegrationTest {
                 throw CallNotPermittedException.createCallNotPermittedException(claudeCircuitBreaker);
             }
             return new IncidentPlan("MEDIUM", "recovered", List.of("node-5"), List.of("Inspect."));
-        }).given(planner).plan(any(), any(), any());
+        }).given(planner).plan(any());
 
         send(alert(alertId, "s-00108"));
 
-        await().atMost(TIMEOUT).untilAsserted(() -> verify(planner, atLeast(3)).plan(any(), any(), any()));
+        await().atMost(TIMEOUT).untilAsserted(() -> verify(planner, atLeast(3)).plan(any()));
         ArgumentCaptor<Incident> saved = ArgumentCaptor.forClass(Incident.class);
-        await().atMost(TIMEOUT).untilAsserted(() -> verify(incidents).save(saved.capture()));
+        await().atMost(TIMEOUT).untilAsserted(() -> verify(correlator).persist(saved.capture(), any()));
         assertThat(saved.getValue().alertId()).isEqualTo(alertId);
         assertThat(saved.getValue().criticality()).isEqualTo("MEDIUM");
         assertThat(pollDlq(alertId, Duration.ofSeconds(3)))

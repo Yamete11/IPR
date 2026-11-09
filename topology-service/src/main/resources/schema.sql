@@ -17,3 +17,12 @@ CREATE TABLE IF NOT EXISTS public.crew_assignments (
 );
 
 CREATE INDEX IF NOT EXISTS crew_assignments_asset_idx ON public.crew_assignments (asset_id);
+
+-- Which generated seed is currently in the graph (SyntheticCityLoader). The loader compares the
+-- stored fingerprint with the configured city and reloads only when they differ, so a restart costs
+-- one query instead of re-running thousands of Cypher statements.
+CREATE TABLE IF NOT EXISTS public.topology_seed_state (
+    seed        TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    loaded_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);

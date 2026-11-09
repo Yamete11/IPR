@@ -55,10 +55,16 @@ dilute the context without improving the plan. How the prompt is bounded:
    simulator's rate; the prompt carries a fixed six-field summary (count, min, max, avg, latest,
    latest-at) from one SQL aggregate (`MetricHistoryRepository.findLastHour`). Constant size
    regardless of ingestion volume.
-2. **The graph walk is bounded twice.** Depth: `GraphRepository.MAX_DEPTH = 10` hops. Breadth: at
-   most `IncidentPromptBuilder.MAX_IMPACTED_IN_PROMPT = 50` objects are listed; the rest are
-   **counted, not silently dropped** (`- ... and 70 more downstream objects (120 in total; list
-   truncated to fit the prompt)`), so the model still knows the blast radius.
+2. **The graph walk is bounded twice.** Depth: `GraphRepository.HIERARCHY_DEPTH = 3` hops (the
+   longest service chain is 2). Breadth: at most `IncidentPromptBuilder.MAX_IMPACTED_IN_PROMPT = 50`
+   objects are listed; the rest are **counted, not silently dropped** (`- ... and 70 more downstream
+   objects (120 in total; list truncated to fit the prompt)`), so the model still knows the blast
+   radius. Crews are capped the same way: at most `MAX_CREW_ASSETS_IN_PROMPT = 10` assets per crew,
+   the rest counted.
+5. **The cheapest call is the one not made.** Root-cause correlation over the graph files an alert
+   under an active upstream incident without calling Claude (`model = "correlated"`): one substation
+   outage with 31 downstream alerts costs one plan, not 32. See
+   [`system-overview.md`](system-overview.md#граф-города-и-корреляция-инцидентов).
 3. **Measured, not guessed.** `PromptTokenBudgetTest` (tag `llm`, `./gradlew promptTokens`, excluded
    from `build`) sends the exact request — system prompt, messages, thinking config and the
    `IncidentPlan` schema — to `POST /v1/messages/count_tokens`, which tokenizes on the target model
@@ -84,9 +90,9 @@ The request has two channels with different roles:
   `IncidentPromptBuilder.SYSTEM_PROMPT`: incident-response coordinator for the city network; use
   only the given context and don't invent objects; criticality is exactly `HIGH`/`MEDIUM`/`LOW` and
   when to rate higher; one-sentence summary; ordered, concrete steps starting with making the site
-  safe. Identical on every request.
+  safe; address the steps to the listed crews and don't invent crews. Identical on every request.
 - **`messages[0]` (user)** — the data for this alert: the alert fields, the metric summary, the
-  impacted objects.
+  impacted objects, the responsible crews.
 
 Keeping instructions out of the data channel matters for two reasons: instructions in `system` are
 treated as the operator's, so text inside the data (e.g. a sensor or building name) is less likely
@@ -133,13 +139,18 @@ infrastructure-alerts ── {alert_id, sensor_id, metric_type, value, rule, det
         │      one aggregate over `metrics`: count/min/max/avg + latest  →  6 numbers
         │
         ├─► AGE          GraphRepository.findMonitoredAsset(sensor_id)       (Sensor)-[:SensorLink]->(asset)
-        │                GraphRepository.findImpacted(asset)                 (asset)-[*1..10]->(dependents)
-        │      Cypher in SQL, bound as ?::agtype  →  [label, id, name] per object
+        │                GraphRepository findImpact(asset), one hybrid statement:
+        │                  cypher((asset)-[*0..3]->(d)) LEFT JOIN crew_assignments / repair_crews
+        │                GraphRepository findUpstream(asset)                 (asset)<-[*1..3]-(u)
+        │      Cypher in SQL, bound as ?::agtype  →  [label, id, name] per object + crews
         │
+        ├─► TimescaleDB  IncidentRepository.findActiveRoot(upstream ids, detected_at ± 30 min)
+        │      found → child incident, no Claude call (stop here)
         ▼
 IncidentPromptBuilder  system prompt  +  "## Alert" / "## Last hour of readings" / "## Impacted objects"
+                                       / "## Responsible crews"
         ▼
-Claude (structured output: IncidentPlan)  →  incidents table
+Claude (structured output: IncidentPlan)  →  incidents table (+ crews from the graph, not the model)
 ```
 
 What makes it fit the token budget (see §2): **aggregate before prompting** (statistics instead of
@@ -152,7 +163,9 @@ service.
 
 The mock planner (`MockIncidentPlanner`) consumes the same retrieved context, so the RAG half is
 verified end-to-end without a key: 3 faults → 3 alerts → 3 incidents with impacted objects resolved
-from the graph.
+from the graph, and with crews and correlation since 2026-11-08 (`CorrelationIntegrationTest` on
+real AGE + TimescaleDB). The crews section changed the prompt, so the §2 token figures are still
+estimates until `promptTokens` runs.
 
 ## Running the token measurement
 

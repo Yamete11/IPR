@@ -1,6 +1,7 @@
 package inno.ipr.incident_api_service.repository;
 
 import com.zaxxer.hikari.HikariDataSource;
+import inno.ipr.incident_api_service.graphql.dto.CrewDto;
 import inno.ipr.incident_api_service.graphql.dto.IncidentDto;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -53,7 +54,18 @@ class IncidentReadRepositoryIntegrationTest {
                 summary           TEXT,
                 model             TEXT,
                 created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
-            )
+            );
+            ALTER TABLE incidents ADD COLUMN IF NOT EXISTS asset_id TEXT;
+            ALTER TABLE incidents ADD COLUMN IF NOT EXISTS root_incident_id TEXT;
+            ALTER TABLE incidents ADD COLUMN IF NOT EXISTS detected_at TIMESTAMPTZ;
+            ALTER TABLE incidents ADD COLUMN IF NOT EXISTS crews JSONB NOT NULL DEFAULT '[]'::jsonb;
+            """;
+
+    private static final String INSERT_CORRELATED = """
+            INSERT INTO incidents (incident_id, alert_id, sensor_id, criticality, impacted_objects,
+                                   remediation_steps, asset_id, root_incident_id, detected_at, crews)
+            VALUES (?, ?, 's-1', 'HIGH', '[]', '[]', ?, ?, '2026-11-08T12:00:00Z'::timestamptz + (? || ' seconds')::interval,
+                    ?::jsonb)
             """;
 
     private static final String INSERT = """
@@ -145,6 +157,40 @@ class IncidentReadRepositoryIntegrationTest {
         assertThat(all).extracting(IncidentDto::incidentId).containsExactly("i-4", "i-3", "i-1");
         assertThat(repository.findBySensor("s-00042", 2)).extracting(IncidentDto::incidentId).containsExactly("i-4", "i-3");
         assertThat(repository.findBySensor("s-none", 50)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("an old row has no asset, root or detection time and an empty crew list")
+    void oldRowsReadWithDefaults() {
+        insert("i-legacy", "a-legacy", "s-00042", "[]", "[]", 0);
+
+        IncidentDto dto = repository.findById("i-legacy");
+
+        assertThat(dto.assetId()).isNull();
+        assertThat(dto.rootIncidentId()).isNull();
+        assertThat(dto.detectedAt()).isNull();
+        assertThat(dto.crews()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("crews come back as typed objects, and findByRoot lists a root's children in detection order")
+    void crewsAndChildren() {
+        jdbc.update(INSERT_CORRELATED, "i-root", "a-root", "sub-1", null, "0",
+                "[{\"crew_id\":\"crew-hv\",\"name\":\"High-voltage crew\",\"phone\":\"+7-900-000-0101\",\"assets\":[\"sub-1\"]}]");
+        jdbc.update(INSERT_CORRELATED, "i-late", "a-late", "bld-12", "i-root", "20", "[]");
+        jdbc.update(INSERT_CORRELATED, "i-early", "a-early", "node-5", "i-root", "10", "[]");
+        jdbc.update(INSERT_CORRELATED, "i-other", "a-other", "node-6", null, "5", "[]");
+
+        IncidentDto root = repository.findById("i-root");
+
+        assertThat(root.assetId()).isEqualTo("sub-1");
+        assertThat(root.detectedAt()).isEqualTo("2026-11-08T12:00:00Z");
+        assertThat(root.crews()).containsExactly(
+                new CrewDto("crew-hv", "High-voltage crew", "+7-900-000-0101", List.of("sub-1")));
+        assertThat(repository.findByRoot("i-root", 50)).extracting(IncidentDto::incidentId)
+                .containsExactly("i-early", "i-late");
+        assertThat(repository.findByRoot("i-root", 1)).hasSize(1);
+        assertThat(repository.findByRoot("i-other", 50)).isEmpty();
     }
 
     @Test

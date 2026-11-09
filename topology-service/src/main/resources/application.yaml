@@ -31,6 +31,12 @@ topology:
     # After seeding, ensure a GIN index on each vertex label's properties (id lookups become index
     # probes) and B-tree indexes on each edge type's start_id/end_id (AGE creates none).
     index-enabled: true
+  # Generated city (SyntheticCityRunner): substations, nodes, buildings and crews for every synthetic
+  # sensor of sensor-simulator, laid out by the rule in SyntheticCity / sensor_simulator.py:layout_of.
+  # CITY_EXTRA_SENSORS is the same variable the simulator reads for --extra-sensors.
+  synthetic:
+    enabled: ${TOPOLOGY_SYNTHETIC_ENABLED:true}
+    sensors: ${CITY_EXTRA_SENSORS:997}
 
 # Liveness/readiness probes for Kubernetes plus the Prometheus scrape endpoint. The readiness
 # group includes the datasource(s) so a pod is not routed to while its database is unreachable.

@@ -26,3 +26,12 @@ table { width: 100%; }
 .row:hover { background: var(--mat-sys-surface-container-high); }
 
 .summary { max-width: 480px; }
+
+.linked-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  margin-right: 6px;
+  border-radius: 8px;
+  background: var(--mat-sys-secondary-container);
+  color: var(--mat-sys-on-secondary-container);
+}

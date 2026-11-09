@@ -1,6 +1,7 @@
 package inno.ipr.ai_incident_responder_service.ai;
 
 import inno.ipr.ai_incident_responder_service.alert.Alert;
+import inno.ipr.ai_incident_responder_service.domain.Crew;
 import inno.ipr.ai_incident_responder_service.domain.ImpactedObject;
 import inno.ipr.ai_incident_responder_service.domain.MetricSummary;
 
@@ -9,8 +10,8 @@ import java.util.List;
 /**
  * Assembles the lightweight-RAG prompt for the Claude call. The prompt is split in two:
  * {@link #SYSTEM_PROMPT} — the fixed role and rules, identical on every request — and
- * {@link #build} — the per-alert user message with the raw alert, a one-hour metric summary, and
- * the dependency-graph objects the failure impacts.
+ * {@link #build} — the per-alert user message with the raw alert, a one-hour metric summary, the
+ * dependency-graph objects the failure impacts and the repair crews assigned to them.
  *
  * <p>The user message is bounded so it stays well within token limits regardless of ingestion
  * volume or graph size: the history is a fixed-size summary, never the raw series, and at most
@@ -25,6 +26,11 @@ import java.util.List;
  * <p>{@link #MAX_IMPACTED_IN_PROMPT} is 50 because one line is ~15 tokens, so 50 lines keep the
  * graph section under ~1k tokens even for a substation that feeds the whole city; beyond that the
  * plan does not improve, it only costs more and dilutes the context.
+ *
+ * <p>{@link #MAX_CREW_ASSETS_IN_PROMPT} caps the assets listed per crew (10, the rest counted): a
+ * district crew covers every asset of its district, and the model needs who to call, not the full
+ * inventory. Crews come from the graph and the relational assignment tables, so the system prompt
+ * tells the model to address steps to them and not to invent others.
  */
 public final class IncidentPromptBuilder {
 
@@ -41,14 +47,20 @@ public final class IncidentPromptBuilder {
             buildings lose service or the latest reading is still outside the safe range.
             - The summary is one sentence for the operator dashboard.
             - Remediation steps are ordered, concrete actions a crew can carry out, starting with \
-            making the site safe.""";
+            making the site safe.
+            - Address the steps to the responsible crews listed in the message, by name; do not \
+            invent crews that are not listed.""";
 
     static final int MAX_IMPACTED_IN_PROMPT = 50;
+    static final int MAX_CREW_ASSETS_IN_PROMPT = 10;
 
     private IncidentPromptBuilder() {
     }
 
-    public static String build(Alert alert, MetricSummary history, List<ImpactedObject> impacted) {
+    public static String build(IncidentContext context) {
+        Alert alert = context.alert();
+        MetricSummary history = context.history();
+        List<ImpactedObject> impacted = context.impacted();
         StringBuilder sb = new StringBuilder();
         sb.append("A monitoring rule has fired. Produce the remediation plan from the context below.\n\n");
 
@@ -92,8 +104,29 @@ public final class IncidentPromptBuilder {
         }
         sb.append('\n');
 
+        sb.append("## Responsible crews\n");
+        if (context.crews().isEmpty()) {
+            sb.append("- none assigned\n");
+        } else {
+            for (Crew crew : context.crews()) {
+                List<String> assets = crew.assets();
+                sb.append("- ").append(crew.name()).append(" (").append(crew.crewId());
+                if (crew.phone() != null) {
+                    sb.append(", ").append(crew.phone());
+                }
+                sb.append("): ").append(String.join(", ",
+                        assets.subList(0, Math.min(assets.size(), MAX_CREW_ASSETS_IN_PROMPT))));
+                if (assets.size() > MAX_CREW_ASSETS_IN_PROMPT) {
+                    sb.append(" and ").append(assets.size() - MAX_CREW_ASSETS_IN_PROMPT).append(" more");
+                }
+                sb.append('\n');
+            }
+        }
+        sb.append('\n');
+
         sb.append("Assess criticality (HIGH/MEDIUM/LOW), summarise the incident in one sentence, ")
-                .append("list the impacted objects, and give ordered, concrete remediation steps.");
+                .append("list the impacted objects, and give ordered, concrete remediation steps ")
+                .append("addressed to the responsible crews.");
         return sb.toString();
     }
 }

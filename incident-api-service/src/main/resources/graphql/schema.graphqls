@@ -1,19 +1,38 @@
 # Read-only API for the demo dashboard over the incidents table + TimescaleDB metrics
 # (see IncidentGraphQLController). Both tables live in the TimescaleDB instance; this service
-# owns neither — it only reads. The two JSONB array columns are exposed as [String!]! (parsed in
-# the repository), so no JSON scalar is needed.
+# owns neither — it only reads. The JSONB array columns are exposed as typed lists (parsed in the
+# repository), so no JSON scalar is needed.
 
 type Incident {
   incidentId: ID!
   alertId: String!
   sensorId: String!
   metricType: String
+  # The graph asset the sensor monitors (null if the sensor is not in the topology graph).
+  assetId: String
+  # Set when the responder filed this incident as a secondary effect of an upstream one.
+  rootIncidentId: ID
+  # When the detector saw the breach; the correlation window is measured on it.
+  detectedAt: String
   criticality: String!
   impactedObjects: [String!]!
   remediationSteps: [String!]!
+  # Repair crews for the impacted assets, resolved from the graph.
+  crews: [Crew!]!
   summary: String
   model: String
   createdAt: String!
+  # The root incident, when this one is a secondary effect.
+  rootIncident: Incident
+  # Incidents filed under this one, in detection order.
+  linkedIncidents(limit: Int! = 100): [Incident!]!
+}
+
+type Crew {
+  crewId: ID!
+  name: String!
+  phone: String
+  assets: [String!]!
 }
 
 type Metric {

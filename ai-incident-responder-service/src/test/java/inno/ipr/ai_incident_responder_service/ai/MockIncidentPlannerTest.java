@@ -1,6 +1,7 @@
 package inno.ipr.ai_incident_responder_service.ai;
 
 import inno.ipr.ai_incident_responder_service.alert.Alert;
+import inno.ipr.ai_incident_responder_service.domain.Crew;
 import inno.ipr.ai_incident_responder_service.domain.ImpactedObject;
 import inno.ipr.ai_incident_responder_service.domain.MetricSummary;
 import org.junit.jupiter.api.DisplayName;
@@ -30,9 +31,9 @@ class MockIncidentPlannerTest {
     @Test
     @DisplayName("lists the graph-derived impacted objects and targets the first one")
     void usesImpactedObjects() {
-        IncidentPlan plan = planner.plan(ALERT, NO_HISTORY, List.of(
+        IncidentPlan plan = planner.plan(context(List.of(
                 new ImpactedObject("node-5", "DistributionNode", Map.of()),
-                new ImpactedObject("bld-12", "ResidentialBuilding", Map.of())));
+                new ImpactedObject("bld-12", "ResidentialBuilding", Map.of())), List.of()));
 
         assertThat(plan.criticality()).isEqualTo("HIGH");
         assertThat(plan.impactedObjects()).containsExactly("DistributionNode node-5", "ResidentialBuilding bld-12");
@@ -45,13 +46,28 @@ class MockIncidentPlannerTest {
     @Test
     @DisplayName("falls back to the sensor itself when the graph resolves nothing")
     void fallsBackToSensor() {
-        assertThat(planner.plan(ALERT, NO_HISTORY, List.of()).impactedObjects()).containsExactly("s-00042");
+        assertThat(planner.plan(context(List.of(), List.of())).impactedObjects()).containsExactly("s-00042");
+    }
+
+    @Test
+    @DisplayName("dispatches the first responsible crew by name and phone")
+    void dispatchesTheCrew() {
+        IncidentPlan plan = planner.plan(context(
+                List.of(new ImpactedObject("node-5", "DistributionNode", Map.of())),
+                List.of(new Crew("crew-grid", "Distribution grid crew", "+7-900-000-0102", List.of("node-5")))));
+
+        assertThat(plan.remediationSteps().get(0))
+                .isEqualTo("Dispatch Distribution grid crew (+7-900-000-0102) to DistributionNode node-5.");
     }
 
     @Test
     @DisplayName("is deterministic for the same input")
     void deterministic() {
         List<ImpactedObject> impacted = List.of(new ImpactedObject("node-5", "DistributionNode", Map.of()));
-        assertThat(planner.plan(ALERT, NO_HISTORY, impacted)).isEqualTo(planner.plan(ALERT, NO_HISTORY, impacted));
+        assertThat(planner.plan(context(impacted, List.of()))).isEqualTo(planner.plan(context(impacted, List.of())));
+    }
+
+    private static IncidentContext context(List<ImpactedObject> impacted, List<Crew> crews) {
+        return new IncidentContext(ALERT, NO_HISTORY, impacted, crews);
     }
 }

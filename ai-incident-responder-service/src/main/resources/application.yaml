@@ -54,6 +54,12 @@ ai:
     mock: ${AI_CLAUDE_MOCK:false}
     # Explicit because Claude Opus 5.5 defaults to medium (Opus 5 defaulted to high).
     effort: ${AI_CLAUDE_EFFORT:high}
+  # Root-cause correlation (IncidentCorrelator): an alert whose asset, or anything upstream of it in
+  # the AGE graph, already has a root incident detected within ±window becomes a secondary incident
+  # of it, with no Claude call. A heuristic (time + dependency path), not proof of cause.
+  correlation:
+    enabled: ${AI_CORRELATION_ENABLED:true}
+    window: ${AI_CORRELATION_WINDOW:30m}
 
 server:
   port: ${SERVER_PORT:8080}

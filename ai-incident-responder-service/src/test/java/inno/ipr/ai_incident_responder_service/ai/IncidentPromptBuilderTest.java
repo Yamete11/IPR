@@ -1,6 +1,7 @@
 package inno.ipr.ai_incident_responder_service.ai;
 
 import inno.ipr.ai_incident_responder_service.alert.Alert;
+import inno.ipr.ai_incident_responder_service.domain.Crew;
 import inno.ipr.ai_incident_responder_service.domain.ImpactedObject;
 import inno.ipr.ai_incident_responder_service.domain.MetricSummary;
 import org.junit.jupiter.api.DisplayName;
@@ -29,7 +30,7 @@ class IncidentPromptBuilderTest {
                 new ImpactedObject("bld-12", "ResidentialBuilding", Map.of()),
                 new ImpactedObject("bld-19", "ResidentialBuilding", null));
 
-        String prompt = IncidentPromptBuilder.build(ALERT, history, impacted);
+        String prompt = IncidentPromptBuilder.build(new IncidentContext(ALERT, history, impacted, List.of()));
 
         assertThat(prompt)
                 .startsWith("A monitoring rule has fired.")
@@ -44,13 +45,14 @@ class IncidentPromptBuilderTest {
                 .contains("- DistributionNode node-5 (North Node)")
                 .contains("- ResidentialBuilding bld-12\n")
                 .contains("- ResidentialBuilding bld-19\n")
-                .endsWith("give ordered, concrete remediation steps.");
+                .contains("## Responsible crews\n- none assigned\n")
+                .endsWith("steps addressed to the responsible crews.");
     }
 
     @Test
     @DisplayName("says so explicitly when there is no history and nothing in the graph")
     void emptyContext() {
-        String prompt = IncidentPromptBuilder.build(ALERT, NO_HISTORY, List.of());
+        String prompt = IncidentPromptBuilder.build(new IncidentContext(ALERT, NO_HISTORY, List.of(), List.of()));
 
         assertThat(prompt)
                 .contains("- no readings recorded in the last hour")
@@ -65,12 +67,30 @@ class IncidentPromptBuilderTest {
                 .mapToObj(i -> new ImpactedObject("bld-" + i, "ResidentialBuilding", Map.of()))
                 .toList();
 
-        String prompt = IncidentPromptBuilder.build(ALERT, NO_HISTORY, impacted);
+        String prompt = IncidentPromptBuilder.build(new IncidentContext(ALERT, NO_HISTORY, impacted, List.of()));
 
         assertThat(prompt)
                 .contains("- ResidentialBuilding bld-49\n")
                 .doesNotContain("bld-50\n")
                 .contains("- ... and 70 more downstream objects (120 in total; list truncated to fit the prompt)");
+    }
+
+    @Test
+    @DisplayName("lists each responsible crew with its phone and at most MAX_CREW_ASSETS_IN_PROMPT assets")
+    void crewsAreListed() {
+        List<String> district = IntStream.range(0, 14).mapToObj(i -> "bld-d00-" + i).toList();
+        List<Crew> crews = List.of(
+                new Crew("crew-d00", "District 00 crew", "+7-900-100-0000", district),
+                new Crew("crew-x", "Night crew", null, List.of("node-5")));
+
+        String prompt = IncidentPromptBuilder.build(new IncidentContext(ALERT, NO_HISTORY, List.of(), crews));
+
+        assertThat(prompt)
+                .contains("- District 00 crew (crew-d00, +7-900-100-0000): bld-d00-0, ")
+                .contains("bld-d00-9 and 4 more\n")
+                .doesNotContain("bld-d00-10")
+                .contains("- Night crew (crew-x): node-5\n");
+        assertThat(IncidentPromptBuilder.SYSTEM_PROMPT).contains("do not invent crews");
     }
 
     @Test

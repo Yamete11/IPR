@@ -1,11 +1,11 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
-import { Component, computed, inject, input } from '@angular/core';
+import { Component, computed, inject, input, signal } from '@angular/core';
 import { rxResource, toObservable, toSignal } from '@angular/core/rxjs-interop';
+import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
-import { MatSelectModule } from '@angular/material/select';
 import { Router, RouterLink } from '@angular/router';
 import { EMPTY, catchError, map, of, switchMap } from 'rxjs';
 
@@ -16,17 +16,19 @@ import { CriticalityChip } from '../shared/criticality-chip';
 import { MetricChart } from '../shared/metric-chart';
 import { poll } from '../shared/poll';
 
+const MAX_MATCHES = 50;
+
 @Component({
   selector: 'app-sensor-metrics',
   imports: [
     DatePipe,
     DecimalPipe,
     RouterLink,
+    MatAutocompleteModule,
     MatButtonModule,
     MatCardModule,
     MatFormFieldModule,
     MatInputModule,
-    MatSelectModule,
     CriticalityChip,
     MetricChart,
   ],
@@ -41,14 +43,23 @@ export class SensorMetrics {
   /** Route param `:id` (optional). */
   readonly id = input<string | undefined>();
 
-  /** Graph-seeded sensors; synthetic ones (--extra-sensors) can be typed in. */
+  /** Sensors in the graph (hand seed + generated city); ids outside it can still be typed in. */
   protected readonly sensors = toSignal(
     this.topologyApi.topology().pipe(
-      map((t) => t.vertices.filter((v) => v.label === 'Sensor')),
+      map((t) => t.vertices.filter((v) => v.label === 'Sensor').sort((a, b) => a.id.localeCompare(b.id))),
       catchError(() => of([])),
     ),
     { initialValue: [] },
   );
+
+  /** What is typed in the search box; the autocomplete shows at most MAX_MATCHES sensors containing it. */
+  protected readonly query = signal('');
+  protected readonly matches = computed(() => {
+    const q = this.query().trim().toLowerCase();
+    return this.sensors()
+      .filter((s) => s.id.toLowerCase().includes(q))
+      .slice(0, MAX_MATCHES);
+  });
 
   private readonly readings = toSignal(
     toObservable(this.id).pipe(

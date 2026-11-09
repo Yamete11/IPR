@@ -6,6 +6,7 @@ import inno.ipr.incident_api_service.repository.IncidentReadRepository;
 import inno.ipr.incident_api_service.repository.MetricReadRepository;
 import org.springframework.graphql.data.method.annotation.Argument;
 import org.springframework.graphql.data.method.annotation.QueryMapping;
+import org.springframework.graphql.data.method.annotation.SchemaMapping;
 import org.springframework.stereotype.Controller;
 
 import java.util.List;
@@ -15,6 +16,11 @@ import java.util.List;
  * {@code metrics}. Method names match the {@code Query} fields in {@code schema.graphqls}; each
  * delegates to a read repository. Stateless — no writes, no Kafka. {@code limit} arguments carry
  * their schema defaults, so they are always supplied by Spring for GraphQL.
+ *
+ * <p>{@link #rootIncident(IncidentDto)} and {@link #linkedIncidents(IncidentDto, int)} resolve the
+ * root-cause links between incidents (written by the responder's graph correlation) as fields of
+ * {@code Incident}. They run once per incident that selects them, so the list queries, which do not,
+ * stay a single SQL statement; the dashboard asks for them only on the detail page.
  *
  * <p>{@link #clamp(int)} bounds every client-supplied {@code limit} to {@code [0, MAX_LIMIT]}
  * ({@code MAX_LIMIT} = 1000) before it reaches {@code LIMIT ?}. The schema defaults are only
@@ -54,6 +60,16 @@ public class IncidentGraphQLController {
     @QueryMapping
     public List<MetricDto> recentMetrics(@Argument String sensorId, @Argument int limit) {
         return metricRepository.findRecentBySensor(sensorId, clamp(limit));
+    }
+
+    @SchemaMapping(typeName = "Incident")
+    public IncidentDto rootIncident(IncidentDto incident) {
+        return incident.rootIncidentId() == null ? null : incidentRepository.findById(incident.rootIncidentId());
+    }
+
+    @SchemaMapping(typeName = "Incident")
+    public List<IncidentDto> linkedIncidents(IncidentDto incident, @Argument int limit) {
+        return incidentRepository.findByRoot(incident.incidentId(), clamp(limit));
     }
 
     private static int clamp(int limit) {

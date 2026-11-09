@@ -25,8 +25,8 @@ class ClaudeIncidentPlannerTest {
         ClaudeIncidentPlanner planner = new ClaudeIncidentPlanner(null, CircuitBreaker.ofDefaults("test"),
                 "claude-opus-5-5", "high");
 
-        MessageCreateParams raw = planner.buildParams(ALERT,
-                new MetricSummary(0, null, null, null, null, null), List.of()).rawParams();
+        MessageCreateParams raw = planner.buildParams(new IncidentContext(ALERT,
+                new MetricSummary(0, null, null, null, null, null), List.of(), List.of())).rawParams();
 
         assertThat(raw.model().asString()).isEqualTo("claude-opus-5-5");
         assertThat(raw.thinking()).hasValueSatisfying(t -> assertThat(t.isAdaptive()).isTrue());

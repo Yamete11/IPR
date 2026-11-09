@@ -1,17 +1,23 @@
 <h1>Sensor readings</h1>
 
 <div class="pickers">
-  <mat-form-field appearance="outline">
-    <mat-label>Graph sensor</mat-label>
-    <mat-select [value]="id()" (selectionChange)="choose($event.value)">
-      @for (s of sensors(); track s.id) {
+  <mat-form-field appearance="outline" class="sensor-search">
+    <mat-label>Sensor id</mat-label>
+    <input
+      matInput
+      #custom
+      placeholder="s-01000"
+      [value]="id() ?? ''"
+      [matAutocomplete]="auto"
+      (input)="query.set(custom.value)"
+      (keyup.enter)="choose(custom.value)"
+    />
+    <mat-autocomplete #auto="matAutocomplete" (optionSelected)="choose($event.option.value)">
+      @for (s of matches(); track s.id) {
         <mat-option [value]="s.id">{{ s.id }} · {{ s.properties?.['metric_type'] }}</mat-option>
       }
-    </mat-select>
-  </mat-form-field>
-  <mat-form-field appearance="outline">
-    <mat-label>Any sensor id</mat-label>
-    <input matInput #custom placeholder="s-01000" (keyup.enter)="choose(custom.value)" />
+    </mat-autocomplete>
+    <mat-hint>{{ sensors().length }} sensors in the graph; any id can be typed</mat-hint>
   </mat-form-field>
   <button mat-stroked-button (click)="choose(custom.value)">Show</button>
 </div>

@@ -17,11 +17,11 @@ Diagram sources: [`architecture.mmd`](architecture.mmd) (component flowchart) an
 
 | Service | Lang | Consumes | Produces / Writes | Reads | Scaling / resilience |
 |---|---|---|---|---|---|
-| **sensor-simulator** | Python | — | Kafka `city-telemetry` (JSON, keyed by `sensor_id`) | — | Load generator; `--extra-sensors 997` for the ~1000-sensor profile |
+| **sensor-simulator** | Python | — | Kafka `city-telemetry` (JSON, keyed by `sensor_id`) | — | Load generator; `--extra-sensors` defaults to `CITY_EXTRA_SENSORS` (997 in K8s); `--cascade-every` plays substation outages that cascade to building water pressure |
 | **ingestion-service** | Java | Kafka `city-telemetry` (consumer group) | metrics → TimescaleDB hypertable; poison msgs → DLQ | — | HPA on Kafka lag; idempotent consumer |
-| **topology-service** | Java | — (seed file at startup) | AGE graph (Cypher); serves GraphQL responses | seed file; AGE graph | Sole writer of AGE; stateless API |
+| **topology-service** | Java | — (seed file + generated city at startup) | AGE graph (Cypher); serves GraphQL responses | seed file; AGE graph | Sole writer of AGE; stateless API |
 | **anomaly-detector** | Java | — (periodic poll) | Kafka `infrastructure-alerts` | TimescaleDB 5-min continuous aggregates / thresholds | Scheduled |
-| **ai-incident-responder** | Java | Kafka `infrastructure-alerts` (consumer group) | Claude API call; `incidents` table INSERT; poison msgs → DLQ | TimescaleDB (1h history) + AGE (dependency graph) | Circuit breaker around Claude API; idempotent consumer |
+| **ai-incident-responder** | Java | Kafka `infrastructure-alerts` (consumer group) | Claude API call; `incidents` table INSERT; poison msgs → DLQ | TimescaleDB (1h history, open incidents) + AGE (dependents, crews, upstream) | Circuit breaker around Claude API; idempotent consumer; root-cause correlation skips Claude for secondary alerts |
 | **incident-api** | Java | — | serves GraphQL responses | `incidents` table + TimescaleDB metrics | Stateless; horizontally scalable |
 
 ## Data infrastructure
@@ -32,7 +32,7 @@ Diagram sources: [`architecture.mmd`](architecture.mmd) (component flowchart) an
   - `*.DLQ` — dead-letter topics for poison messages (per Idempotent Consumer / DLQ patterns).
 - **PostgreSQL** (two instances, one extension each):
   - `timescaledb` (TimescaleDB): `metrics` hypertable, `metrics_5m_avg` continuous aggregate, `incidents` table.
-  - `age-db` (Apache AGE): `city_topology` graph — vertices `Substation`, `DistributionNode`, `ResidentialBuilding`, `Sensor`; edges `PowerLine`, `Pipeline`, `SensorLink`. Written **only** by `topology-service` (seeded from `topology-service/src/main/resources/seed/city-topology.json`). Next to the graph, `topology-service` also owns two relational tables, `repair_crews` and `crew_assignments` (asset id → crew), joined against Cypher results in the `responsibleCrews` query. GraphQL read API: `vertices`, `edges`, `dependents`, `dependencies`, `impactSummary` (Cypher aggregation), `paths` (path finding), `responsibleCrews` (hybrid SQL + Cypher). Model, queries and the AGE-vs-SQL benchmark: [`graph-vs-sql.md`](graph-vs-sql.md).
+  - `age-db` (Apache AGE): `city_topology` graph — vertices `Substation`, `DistributionNode`, `ResidentialBuilding`, `Sensor`; edges `PowerLine`, `Pipeline`, `SensorLink`. Written **only** by `topology-service`: the hand seed from `topology-service/src/main/resources/seed/city-topology.json` plus a generated city that links every synthetic simulator sensor (`SyntheticCity`: 21 substations, 84 nodes, 333 buildings and one crew per district for `CITY_EXTRA_SENSORS=997`; ids `sub-dDD` / `node-dDD-k` / `bld-dDD-k-b`, layout rule mirrored by `sensor_simulator.py:layout_of`). Next to the graph, `topology-service` also owns two relational tables, `repair_crews` and `crew_assignments` (asset id → crew), joined against Cypher results in the `responsibleCrews` query. GraphQL read API: `vertices`, `edges`, `dependents`, `dependencies`, `impactSummary` (Cypher aggregation), `paths` (path finding), `responsibleCrews` (hybrid SQL + Cypher). Model, queries and the AGE-vs-SQL benchmark: [`graph-vs-sql.md`](graph-vs-sql.md).
 
 ## Message & data contracts
 
@@ -51,6 +51,7 @@ Diagram sources: [`architecture.mmd`](architecture.mmd) (component flowchart) an
 ```json
 { "criticality": "HIGH", "impacted_objects": ["DistributionNode#5", "Building#12", "Building#19"], "remediation_steps": ["...", "..."] }
 ```
+Besides the plan, each `incidents` row records `asset_id` (the graph asset the sensor watches), `detected_at`, `crews` (JSONB, resolved from the graph and the crew tables, never from the model) and `root_incident_id`. An alert whose asset, or anything upstream of it in the graph, already has a root incident detected within ±`ai.correlation.window` (30 min) is stored as a child of it with `model = "correlated"` and **no Claude call**; a new root adopts the root incidents already open downstream. Details and limits: [`system-overview.md`](system-overview.md#граф-города-и-корреляция-инцидентов).
 
 ## Communication paths
 
@@ -61,9 +62,9 @@ Diagram sources: [`architecture.mmd`](architecture.mmd) (component flowchart) an
 5. `anomaly-detector` → **TimescaleDB** — reads 5-min continuous aggregates / threshold rules.
 6. `anomaly-detector` → **Kafka `infrastructure-alerts`** — async produce on critical breach.
 7. **Kafka `infrastructure-alerts`** → `ai-incident-responder` — consumer group.
-8. `ai-incident-responder` → **TimescaleDB** (last 1h history) + **AGE** (dependency graph) — context gathering (lightweight RAG); reads the AGE graph directly (owned by `topology-service`).
+8. `ai-incident-responder` → **TimescaleDB** (last 1h history, open incidents) + **AGE** (dependents and their crews in one hybrid SQL + Cypher query, upstream assets) — context gathering (lightweight RAG) and root-cause correlation; reads the AGE graph directly (owned by `topology-service`).
 9. `ai-incident-responder` → **Claude API** — structured prompt over HTTPS; circuit breaker guards downtime.
-10. `ai-incident-responder` → **`incidents` table** — persists the returned remediation plan.
+10. `ai-incident-responder` → **`incidents` table** — persists the returned remediation plan, or a correlated child of an upstream incident.
 11. `dashboard` → `incident-api` → **`incidents` table + TimescaleDB** — the dashboard sends a **GraphQL query**; `incident-api` resolves it with read-only SQL and returns the requested fields.
 12. `dashboard` → `topology-service` → **AGE** — GraphQL query for the network/asset view (impacted objects, dependencies).
 

@@ -149,3 +149,17 @@ incidents→read-API chain. Only the **real Claude call** remains unexercised (n
   `envFrom`, created by `deploy/charts/smartcity-infra` when `anthropic.apiKey` is set). Cluster run
   still to be exercised.
 - Next service after this: `incident-api` (read-only GraphQL over `incidents` + metrics).
+
+## Graph usefulness: crews + root-cause correlation (2026-11-08)
+- `GraphRepository.loadContext`: monitored asset → one hybrid statement for impacted objects **and**
+  crews (`cypher((asset)-[*0..3]->(d)) LEFT JOIN public.crew_assignments / repair_crews`) → upstream
+  walk `(asset)<-[*1..3]-(u)` ranked Substation → Node → Building. Depth 3, not 10.
+- Prompt gains `## Responsible crews` (+ a "don't invent crews" rule); `incidents.crews` JSONB comes
+  from the graph, never from the model. Mock planner dispatches the first crew by name and phone.
+- `IncidentCorrelator`: an alert whose asset or anything upstream has a root incident detected within
+  ±`ai.correlation.window` (30m) becomes a child (`model=correlated`, no planner call); a new root
+  adopts open roots downstream. Re-check + insert + adopt in one transaction under
+  `pg_advisory_xact_lock`. New columns via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
+- Tests: Testcontainers AGE + TimescaleDB (`GraphRepositoryIntegrationTest`,
+  `IncidentRepositoryIntegrationTest`, `CorrelationIntegrationTest`, both arrival orders).
+- Deferred: recovery events from the detector would make "active" exact instead of time-based.

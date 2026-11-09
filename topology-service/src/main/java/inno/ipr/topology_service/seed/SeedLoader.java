@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.annotation.Order;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
@@ -49,8 +50,11 @@ import java.util.Map;
  * binds each property as its own <em>scalar</em> parameter: AGE 1.6.0 rejects a map-valued parameter
  * in {@code SET n += $map} ("SET clause expects a map"). Property names are interpolated as
  * identifiers, so each is checked with {@link AgeClient#checkIdentifier(String, String)} first.
+ *
+ * <p>{@code @Order(1)}: runs before {@code SyntheticCityRunner}, which adds the generated city.
  */
 @Component
+@Order(1)
 @ConditionalOnProperty(name = "topology.seed.enabled", havingValue = "true", matchIfMissing = true)
 public class SeedLoader implements ApplicationRunner {
 

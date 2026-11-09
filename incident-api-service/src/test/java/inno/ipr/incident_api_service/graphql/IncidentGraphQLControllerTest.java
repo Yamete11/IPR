@@ -1,5 +1,6 @@
 package inno.ipr.incident_api_service.graphql;
 
+import inno.ipr.incident_api_service.graphql.dto.CrewDto;
 import inno.ipr.incident_api_service.graphql.dto.IncidentDto;
 import inno.ipr.incident_api_service.graphql.dto.MetricDto;
 import inno.ipr.incident_api_service.repository.IncidentReadRepository;
@@ -28,10 +29,14 @@ import static org.mockito.Mockito.verify;
 class IncidentGraphQLControllerTest {
 
     private static final IncidentDto INCIDENT = new IncidentDto(
-            "i-17155ca7", "a-1001", "s-00042", "pipe_pressure", "HIGH",
+            "i-17155ca7", "a-1001", "s-00042", "pipe_pressure", "node-5", null, "2026-09-06T09:59:50Z", "HIGH",
             List.of("DistributionNode node-5", "ResidentialBuilding bld-12"),
             List.of("Dispatch a repair crew to node-5.", "Confirm service is restored."),
+            List.of(new CrewDto("crew-grid", "Distribution grid crew", "+7-900-000-0102", List.of("node-5"))),
             "Zero pressure at node-5", "mock", "2026-09-06T10:00:00Z");
+    private static final IncidentDto CHILD = new IncidentDto(
+            "i-child", "a-1002", "s-01000", "pipe_pressure", "bld-12", "i-17155ca7", "2026-09-06T10:00:05Z", "HIGH",
+            List.of(), List.of(), List.of(), "Secondary effect", "correlated", "2026-09-06T10:00:06Z");
 
     @Autowired
     private GraphQlTester graphQl;
@@ -112,5 +117,37 @@ class IncidentGraphQLControllerTest {
                 .path("recentMetrics[0].status").entity(String.class).isEqualTo("CRITICAL");
 
         verify(metrics).findRecentBySensor("s-00042", 1000);
+    }
+
+    @Test
+    @DisplayName("an incident exposes its crews, its root and the incidents filed under it")
+    void rootCauseLinks() {
+        given(incidents.findById("i-child")).willReturn(CHILD);
+        given(incidents.findById("i-17155ca7")).willReturn(INCIDENT);
+        given(incidents.findByRoot(eq("i-17155ca7"), anyInt())).willReturn(List.of(CHILD));
+
+        graphQl.document("""
+                { incident(id: "i-child") { assetId rootIncidentId model
+                    rootIncident { incidentId assetId crews { crewId name phone assets }
+                                   linkedIncidents { incidentId } } } }
+                """)
+                .execute()
+                .path("incident.assetId").entity(String.class).isEqualTo("bld-12")
+                .path("incident.model").entity(String.class).isEqualTo("correlated")
+                .path("incident.rootIncident.incidentId").entity(String.class).isEqualTo("i-17155ca7")
+                .path("incident.rootIncident.crews[0].name").entity(String.class).isEqualTo("Distribution grid crew")
+                .path("incident.rootIncident.crews[0].assets").entityList(String.class).containsExactly("node-5")
+                .path("incident.rootIncident.linkedIncidents[0].incidentId").entity(String.class).isEqualTo("i-child");
+
+        verify(incidents).findByRoot("i-17155ca7", 100);
+    }
+
+    @Test
+    @DisplayName("a root incident has no rootIncident")
+    void rootHasNoRoot() {
+        given(incidents.findById("i-17155ca7")).willReturn(INCIDENT);
+
+        graphQl.document("{ incident(id: \"i-17155ca7\") { rootIncident { incidentId } } }").execute()
+                .path("incident.rootIncident").valueIsNull();
     }
 }

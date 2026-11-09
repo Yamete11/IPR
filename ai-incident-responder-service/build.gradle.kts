@@ -45,6 +45,10 @@ dependencies {
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
 	// In-JVM broker for the alert-pipeline integration test — no Docker needed.
 	testImplementation("org.springframework.kafka:spring-kafka-test")
+	// Real Apache AGE + TimescaleDB for the graph/correlation integration tests (self-skip without
+	// Docker). Testcontainers 2.x coordinates, versions from the Boot BOM — as in topology-service.
+	testImplementation("org.testcontainers:testcontainers-junit-jupiter")
+	testImplementation("org.testcontainers:testcontainers-postgresql")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

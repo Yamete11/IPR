@@ -10,13 +10,21 @@ that ``ingestion-service`` consumes into the TimescaleDB ``metrics`` hypertable.
 Each sensor follows a bounded random walk around a per-metric baseline; with a small probability a
 reading is a hard fault (e.g. ``pipe_pressure`` → 0.0) that holds for ``--fault-hold`` readings and
 then decays back toward the baseline, which the downstream anomaly-detector is meant to catch. The
-three "known" sensors are the ones seeded into the AGE topology graph by ``topology-service``
-(linked via ``SensorLink``), so the whole pipeline lines up end to end; extra synthetic sensors can
-be added purely for load.
+three "known" sensors are the ones hand-seeded into the AGE topology graph by ``topology-service``
+(linked via ``SensorLink``). Synthetic sensors ``s-01000`` and up are linked too: topology-service
+generates a city for them with the same layout rule as ``layout_of`` below (see ``SyntheticCity``).
+
+With ``--cascade-every`` the simulator also plays power outages along that graph: every N seconds
+the next district's substation loses voltage (all its voltage sensors fault), and ``--cascade-delay``
+seconds later the water pressure in every building of the district drops, because the pumps lost
+power. Downstream, the responder files the pressure alerts under the substation incident instead of
+planning each one — root-cause correlation over the graph. Use ``--anomaly-prob 0`` with it, or
+random faults will correlate with each other.
 
 Run:
     python sensor_simulator.py                 # emit for the 3 known sensors every 2s
     python sensor_simulator.py --extra-sensors 100 --interval 0.5
+    python sensor_simulator.py --extra-sensors 997 --interval 1 --anomaly-prob 0 --cascade-every 300
     KAFKA_BOOTSTRAP=localhost:9092 python sensor_simulator.py
 """
 
@@ -27,10 +35,12 @@ import json
 import logging
 import os
 import random
+import math
 import signal
 import sys
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from confluent_kafka import Producer
@@ -62,6 +72,22 @@ KNOWN_SENSORS: list[tuple[str, str]] = [
     ("s-00108", "cable_temperature"),
     ("s-00311", "substation_voltage"),
 ]
+
+# The generated city (mirrors topology-service SyntheticCity; both test the same fixture ids). Synthetic
+# sensor i is s-{FIRST_SYNTHETIC + i}; triple t = i // 3 owns building t, node t // BUILDINGS_PER_NODE,
+# substation node // NODES_PER_SUBSTATION. Fixed constants, so a different sensor count on either side
+# changes how many sensors are linked, never where a sensor is linked.
+FIRST_SYNTHETIC = 1000
+BUILDINGS_PER_NODE = 4
+NODES_PER_SUBSTATION = 4
+
+# The hand-seeded district: s-00311 watches sub-1's voltage, s-00042 the pressure at node-5 below it.
+HAND_DISTRICT = ("sub-1", ["s-00311"], ["s-00042"])
+
+# How long a cascade outage lasts, and the first cascade's offset from start-up (so a demo shows one
+# soon instead of after a full --cascade-every period).
+CASCADE_OUTAGE_SECONDS = 30.0
+CASCADE_FIRST_AFTER_SECONDS = 10.0
 
 
 @dataclass
@@ -105,6 +131,10 @@ class Sensor:
         status = "OK" if spec["ok_low"] <= self.value <= spec["ok_high"] else "WARN"
         return round(self.value, 3), status
 
+    def force_fault(self, hold: int) -> None:
+        """Start a hard-fault episode now: the next ``hold`` readings are the metric's fault value."""
+        self.fault_ticks = max(self.fault_ticks, hold)
+
 
 def _clamp(x: float, low: float, high: float) -> float:
     return max(low, min(high, x))
@@ -117,8 +147,83 @@ def build_sensors(extra: int) -> list[Sensor]:
     for i in range(extra):
         mtype = metric_types[i % len(metric_types)]
         # Number synthetic sensors from 1000 up so they never collide with the known s-00xxx ids.
-        sensors.append(Sensor(f"s-{1000 + i:05d}", mtype, METRICS[mtype]["baseline"]))
+        sensors.append(Sensor(f"s-{FIRST_SYNTHETIC + i:05d}", mtype, METRICS[mtype]["baseline"]))
     return sensors
+
+
+def layout_of(index: int) -> tuple[str, str]:
+    """``(asset_id, district)`` that synthetic sensor ``index`` watches in topology-service's city.
+
+    Pressure sensors watch their building, cable sensors their node, voltage sensors their substation.
+    """
+    triple = index // 3
+    node = triple // BUILDINGS_PER_NODE
+    district = f"d{node // NODES_PER_SUBSTATION:02d}"
+    kind = index % 3
+    if kind == 0:
+        return f"bld-{district}-{node % NODES_PER_SUBSTATION}-{triple % BUILDINGS_PER_NODE}", district
+    if kind == 1:
+        return f"node-{district}-{node % NODES_PER_SUBSTATION}", district
+    return f"sub-{district}", district
+
+
+@dataclass
+class District:
+    """The sensors an outage of one substation affects: its voltage sensors, then the pressure
+    sensors of the buildings it feeds."""
+
+    substation: str
+    voltage: list[str] = field(default_factory=list)
+    pressure: list[str] = field(default_factory=list)
+
+
+def districts_of(extra: int) -> list[District]:
+    """Districts with a voltage sensor, synthetic ones in order, the hand-seeded one last."""
+    by_name: dict[str, District] = {}
+    for i in range(extra):
+        _, district = layout_of(i)
+        entry = by_name.setdefault(district, District(f"sub-{district}"))
+        sensor_id = f"s-{FIRST_SYNTHETIC + i:05d}"
+        if i % 3 == 2:
+            entry.voltage.append(sensor_id)
+        elif i % 3 == 0:
+            entry.pressure.append(sensor_id)
+    districts = [d for d in by_name.values() if d.voltage]
+    substation, voltage, pressure = HAND_DISTRICT
+    districts.append(District(substation, list(voltage), list(pressure)))
+    return districts
+
+
+class CascadeScheduler:
+    """Decides which sensors fail when, for ``--cascade-every``.
+
+    Every ``every`` seconds (the first time ``first_after`` seconds after ``start``) the next
+    district, round-robin, has a substation outage: its voltage sensors fault at once, its pressure
+    sensors ``delay`` seconds later. ``due(now)`` returns the ``(substation, kind, sensor_ids)``
+    groups whose time has come since the last call. Time is passed in, so tests need no clock.
+    """
+
+    def __init__(self, districts: list[District], every: float, delay: float, start: float,
+                 first_after: float = CASCADE_FIRST_AFTER_SECONDS) -> None:
+        if not districts:
+            raise ValueError("a cascade needs at least one district")
+        self._districts = districts
+        self._every = every
+        self._delay = delay
+        self._next = start + min(first_after, every)
+        self._round = 0
+        self._pending: list[tuple[float, str, str, list[str]]] = []
+
+    def due(self, now: float) -> list[tuple[str, str, list[str]]]:
+        while now >= self._next:
+            district = self._districts[self._round % len(self._districts)]
+            self._round += 1
+            self._pending.append((self._next, district.substation, "voltage", district.voltage))
+            self._pending.append((self._next + self._delay, district.substation, "pressure", district.pressure))
+            self._next += self._every
+        ready = [p for p in self._pending if p[0] <= now]
+        self._pending = [p for p in self._pending if p[0] > now]
+        return [(substation, kind, ids) for _, substation, kind, ids in ready if ids]
 
 
 _last_stamp: datetime | None = None
@@ -163,8 +268,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Destination topic (default: city-telemetry).")
     p.add_argument("--interval", type=float, default=2.0,
                    help="Seconds between emission rounds; each round emits one reading per sensor.")
-    p.add_argument("--extra-sensors", type=int, default=0,
-                   help="Synthetic sensors added on top of the 3 known ones, for load (default: 0).")
+    p.add_argument("--extra-sensors", type=int, default=int(os.environ.get("CITY_EXTRA_SENSORS", "0")),
+                   help="Synthetic sensors added on top of the 3 known ones (default: env CITY_EXTRA_SENSORS "
+                        "or 0; topology-service builds its city from the same variable).")
     p.add_argument("--anomaly-prob", type=float, default=0.02,
                    help="Per-reading probability of a hard fault (default: 0.02).")
     p.add_argument("--fault-hold", type=int, default=3,
@@ -172,6 +278,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-messages", type=int, default=0,
                    help="Stop after N messages; 0 (default) runs until interrupted.")
     p.add_argument("--seed", type=int, default=None, help="RNG seed for reproducible runs.")
+    p.add_argument("--cascade-every", type=float, default=0.0,
+                   help="Seconds between substation outages that cascade to the buildings' water "
+                        "pressure, district by district; 0 (default) disables cascades.")
+    p.add_argument("--cascade-delay", type=float, default=5.0,
+                   help="Seconds from a substation's voltage loss to the pressure drop below it (default: 5).")
 
     args = p.parse_args(argv)
 
@@ -187,6 +298,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error("--extra-sensors cannot be negative")
     if args.max_messages < 0:
         p.error("--max-messages cannot be negative")
+    if args.cascade_every < 0:
+        p.error("--cascade-every cannot be negative")
+    if args.cascade_delay < 0:
+        p.error("--cascade-delay cannot be negative")
     return args
 
 
@@ -232,6 +347,15 @@ def run(args: argparse.Namespace) -> int:
              args.topic, args.bootstrap, len(sensors), len(KNOWN_SENSORS), args.extra_sensors,
              args.interval, args.anomaly_prob)
 
+    by_id = {s.sensor_id: s for s in sensors}
+    cascade: CascadeScheduler | None = None
+    outage_hold = max(args.fault_hold, math.ceil(CASCADE_OUTAGE_SECONDS / args.interval))
+    if args.cascade_every > 0:
+        districts = districts_of(args.extra_sensors)
+        cascade = CascadeScheduler(districts, args.cascade_every, args.cascade_delay, time.monotonic())
+        log.info("Cascades every %.0fs over %d districts (pressure drops %.0fs after voltage, outage %d readings)",
+                 args.cascade_every, len(districts), args.cascade_delay, outage_hold)
+
     stats = {"enqueued": 0, "delivered": 0, "failed": 0}
 
     def on_delivery(err, _msg):
@@ -256,6 +380,11 @@ def run(args: argparse.Namespace) -> int:
     remaining = 0
     try:
         while not stop_event.is_set():
+            if cascade is not None:
+                for substation, kind, ids in cascade.due(time.monotonic()):
+                    for sensor_id in ids:
+                        by_id[sensor_id].force_fault(outage_hold)
+                    log.info("Cascade at %s: %s fault on %d sensors", substation, kind, len(ids))
             for sensor in sensors:
                 message = make_message(sensor, args.anomaly_prob, args.fault_hold)
                 if _produce(producer, args.topic, sensor.sensor_id, message, on_delivery, stop_event):

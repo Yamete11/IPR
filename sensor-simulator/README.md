@@ -14,8 +14,24 @@ Each sensor follows a bounded, mean-reverting random walk around a per-metric ba
 probability (`--anomaly-prob`) it enters a hard fault (e.g. `pipe_pressure` → `0.0`, status
 `CRITICAL`) that holds for `--fault-hold` readings and then decays back toward the baseline, for the
 downstream anomaly-detector to catch. The three **known** sensors (`s-00042`, `s-00108`, `s-00311`)
-are exactly the ones seeded into the AGE topology graph by `topology-service`, so an alert resolves
-to real graph dependents; `--extra-sensors` adds synthetic ones (`s-01000`+) for load only.
+are exactly the ones hand-seeded into the AGE topology graph by `topology-service`.
+`--extra-sensors` adds synthetic ones (`s-01000`+); its default is the env var `CITY_EXTRA_SENSORS`,
+the same one topology-service generates its city from, so they resolve to real graph assets too.
+The layout rule (`layout_of`) mirrors topology-service's `SyntheticCity`, and both test suites pin
+the same fixture ids (`s-01000 → bld-d00-0-0`, `s-01002 → sub-d00`, …).
+
+## Cascades
+
+`--cascade-every SECONDS` plays substation outages along that graph: 10 s after start, then every
+`SECONDS`, the next district (round-robin, the hand-seeded `sub-1` last) loses voltage — all its
+voltage sensors fault — and `--cascade-delay` seconds later (default 5) every building of the
+district loses water pressure. An outage lasts ~30 s. Downstream the responder plans the first
+voltage alert and files the rest under it without calling Claude (root-cause correlation over the
+graph). Run it with `--anomaly-prob 0`: random faults would correlate with each other.
+
+```bash
+python sensor_simulator.py --extra-sensors 997 --interval 1 --anomaly-prob 0 --cascade-every 300
+```
 
 Timestamps are microsecond-precision and strictly increasing. The wall clock is far coarser than the
 emission rate (~15 ms granularity on Windows), and a repeated `(timestamp, sensor_id, metric_type)`
